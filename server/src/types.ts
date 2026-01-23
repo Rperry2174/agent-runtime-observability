@@ -102,7 +102,17 @@ export type TelemetryEventKind =
   | 'thinkingEnd'
   | 'contextCompact'
   | 'agentResponse'
-  | 'beforeSubmitPrompt';
+  | 'beforeSubmitPrompt'
+  // Shell execution hooks
+  | 'shellStart'
+  | 'shellEnd'
+  // MCP execution hook
+  | 'mcpEnd'
+  // File edit hooks
+  | 'fileEditEnd'
+  // Tab file hooks
+  | 'tabReadStart'
+  | 'tabEditEnd';
 
 /**
  * Raw telemetry event from hooks.

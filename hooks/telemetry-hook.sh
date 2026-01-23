@@ -40,190 +40,75 @@ if [ -z "$RUN_ID" ]; then
     exit 0
 fi
 
-# Build JSON payload with all available fields
-# Start with required fields
-PAYLOAD="{\"eventKind\":\"$EVENT_KIND\""
-PAYLOAD="$PAYLOAD,\"timestamp\":$(date +%s000)"
-PAYLOAD="$PAYLOAD,\"runId\":\"$RUN_ID\""
+# Build JSON payload safely using jq (avoid manual escaping).
+# Any truncation happens on the encoded string form.
+PAYLOAD=$(
+  echo "$INPUT" | /usr/bin/jq -c \
+    --arg eventKind "$EVENT_KIND" \
+    --argjson timestamp "$(date +%s000)" \
+    '
+      def trunc($n):
+        if . == null then null
+        elif type == "string" then .[0:$n]
+        else (tojson | .[0:$n])
+        end;
 
-# Add source detection
-if echo "$INPUT" | /usr/bin/jq -e '.conversation_id' >/dev/null 2>&1; then
-    PAYLOAD="$PAYLOAD,\"source\":\"cursor\""
-elif echo "$INPUT" | /usr/bin/jq -e '.session_id' >/dev/null 2>&1; then
-    PAYLOAD="$PAYLOAD,\"source\":\"claude\""
+      {
+        eventKind: $eventKind,
+        timestamp: $timestamp,
+        runId: (.conversation_id // .session_id // null),
+        source: (if .conversation_id then "cursor" elif .session_id then "claude" else null end),
+
+        spanId: (.tool_use_id // null),
+        agentId: (.agent_id // .agentId // .subagent_id // .task_agent_id // null),
+        parentAgentId: (.parent_agent_id // .parentAgentId // null),
+        parentSpanId: (.parent_span_id // .parentSpanId // .task_span_id // null),
+
+        toolName: (.tool_name // null),
+        toolInput: (.tool_input? | trunc(500)),
+        toolOutput: (.tool_output? | trunc(300)),
+        prompt: (.prompt? | trunc(1000)),
+
+        hookEventName: (.hook_event_name // null),
+        turnId: (.generation_id // null),
+        model: (.model // null),
+        agentType: (.subagent_type // .agent_type // null),
+
+        duration: (.duration // .duration_ms // null),
+        errorMessage: (.error_message? | trunc(200)),
+        failureType: (.failure_type // null),
+        status: (.status // null),
+
+        projectRoot: (.workspace_roots[0] // null),
+        transcriptPath: (.transcript_path // null),
+        agentTranscriptPath: (.agent_transcript_path // null),
+
+        attachments: (if (.attachments? // null) == null or .attachments == [] then null else .attachments end),
+
+        thinkingText: (if $eventKind == "thinkingEnd" then (.text? | trunc(500)) else null end),
+        thinkingDurationMs: (.duration_ms // null),
+        responseText: (if $eventKind == "agentResponse" then (.text? | trunc(300)) else null end),
+
+        contextUsagePercent: (.context_usage_percent // null),
+        contextTokens: (.context_tokens // null),
+        messagesToCompact: (.messages_to_compact // null)
+      }
+      | with_entries(select(.value != null and .value != "" and .value != []))
+    ' 2>/dev/null
+)
+
+if [ -z "$PAYLOAD" ] || [ "$PAYLOAD" = "null" ]; then
+  echo "$(date): [$EVENT_KIND] SKIP - failed to build payload" >> "$LOG_FILE"
+  exit 0
 fi
-
-# Extract span ID (Cursor tool_use_id)
-SPAN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.tool_use_id // empty' 2>/dev/null)
-if [ -n "$SPAN_ID" ]; then
-    PAYLOAD="$PAYLOAD,\"spanId\":\"$SPAN_ID\""
-fi
-
-# Extract agent ID (various possible field names)
-AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.agent_id // .agentId // .subagent_id // .task_agent_id // empty' 2>/dev/null)
-if [ -n "$AGENT_ID" ]; then
-    PAYLOAD="$PAYLOAD,\"agentId\":\"$AGENT_ID\""
-fi
-
-# Extract parent agent ID
-PARENT_AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.parent_agent_id // .parentAgentId // empty' 2>/dev/null)
-if [ -n "$PARENT_AGENT_ID" ]; then
-    PAYLOAD="$PAYLOAD,\"parentAgentId\":\"$PARENT_AGENT_ID\""
-fi
-
-# Extract parent span ID (for Task tool nesting)
-PARENT_SPAN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.parent_span_id // .parentSpanId // .task_span_id // empty' 2>/dev/null)
-if [ -n "$PARENT_SPAN_ID" ]; then
-    PAYLOAD="$PAYLOAD,\"parentSpanId\":\"$PARENT_SPAN_ID\""
-fi
-
-# Extract tool name
-TOOL_NAME=$(echo "$INPUT" | /usr/bin/jq -r '.tool_name // empty' 2>/dev/null)
-if [ -n "$TOOL_NAME" ]; then
-    PAYLOAD="$PAYLOAD,\"toolName\":\"$TOOL_NAME\""
-fi
-
-# Extract tool input (safely escape and truncate)
-TOOL_INPUT=$(echo "$INPUT" | /usr/bin/jq -c '.tool_input // empty' 2>/dev/null)
-if [ -n "$TOOL_INPUT" ] && [ "$TOOL_INPUT" != "null" ]; then
-    # Escape for JSON string and truncate
-    ESCAPED_INPUT=$(echo "$TOOL_INPUT" | head -c 500 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"toolInput\":\"$ESCAPED_INPUT\""
-fi
-
-# Extract tool output (for postToolUse)
-TOOL_OUTPUT=$(echo "$INPUT" | /usr/bin/jq -r '.tool_output // empty' 2>/dev/null)
-if [ -n "$TOOL_OUTPUT" ]; then
-    ESCAPED_OUTPUT=$(echo "$TOOL_OUTPUT" | head -c 300 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"toolOutput\":\"$ESCAPED_OUTPUT\""
-fi
-
-# Extract prompt text (for beforeSubmitPrompt)
-PROMPT_TEXT=$(echo "$INPUT" | /usr/bin/jq -r '.prompt // empty' 2>/dev/null)
-if [ -n "$PROMPT_TEXT" ]; then
-    ESCAPED_PROMPT=$(echo "$PROMPT_TEXT" | head -c 1000 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"prompt\":\"$ESCAPED_PROMPT\""
-fi
-
-# Extract hook event name
-HOOK_NAME=$(echo "$INPUT" | /usr/bin/jq -r '.hook_event_name // empty' 2>/dev/null)
-if [ -n "$HOOK_NAME" ]; then
-    PAYLOAD="$PAYLOAD,\"hookEventName\":\"$HOOK_NAME\""
-fi
-
-# Extract generation/turn ID
-TURN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.generation_id // empty' 2>/dev/null)
-if [ -n "$TURN_ID" ]; then
-    PAYLOAD="$PAYLOAD,\"turnId\":\"$TURN_ID\""
-fi
-
-# Extract model
-MODEL=$(echo "$INPUT" | /usr/bin/jq -r '.model // empty' 2>/dev/null)
-if [ -n "$MODEL" ]; then
-    PAYLOAD="$PAYLOAD,\"model\":\"$MODEL\""
-fi
-
-# Extract agent/subagent type
-AGENT_TYPE=$(echo "$INPUT" | /usr/bin/jq -r '.subagent_type // .agent_type // empty' 2>/dev/null)
-if [ -n "$AGENT_TYPE" ]; then
-    PAYLOAD="$PAYLOAD,\"agentType\":\"$AGENT_TYPE\""
-fi
-
-# Extract duration (various field names)
-DURATION=$(echo "$INPUT" | /usr/bin/jq -r '.duration // .duration_ms // empty' 2>/dev/null)
-if [ -n "$DURATION" ] && [ "$DURATION" != "null" ]; then
-    PAYLOAD="$PAYLOAD,\"duration\":$DURATION"
-fi
-
-# Extract error info for failures
-ERROR_MSG=$(echo "$INPUT" | /usr/bin/jq -r '.error_message // empty' 2>/dev/null)
-if [ -n "$ERROR_MSG" ]; then
-    ESCAPED_ERROR=$(echo "$ERROR_MSG" | head -c 200 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"errorMessage\":\"$ESCAPED_ERROR\""
-fi
-
-FAILURE_TYPE=$(echo "$INPUT" | /usr/bin/jq -r '.failure_type // empty' 2>/dev/null)
-if [ -n "$FAILURE_TYPE" ]; then
-    PAYLOAD="$PAYLOAD,\"failureType\":\"$FAILURE_TYPE\""
-fi
-
-# Extract status (for stop events)
-STATUS=$(echo "$INPUT" | /usr/bin/jq -r '.status // empty' 2>/dev/null)
-if [ -n "$STATUS" ]; then
-    PAYLOAD="$PAYLOAD,\"status\":\"$STATUS\""
-fi
-
-# Extract workspace/project info
-PROJECT_ROOT=$(echo "$INPUT" | /usr/bin/jq -r '.workspace_roots[0] // empty' 2>/dev/null)
-if [ -n "$PROJECT_ROOT" ]; then
-    PAYLOAD="$PAYLOAD,\"projectRoot\":\"$PROJECT_ROOT\""
-fi
-
-# Extract transcript path (for browsing conversations)
-TRANSCRIPT_PATH=$(echo "$INPUT" | /usr/bin/jq -r '.transcript_path // empty' 2>/dev/null)
-if [ -n "$TRANSCRIPT_PATH" ]; then
-    PAYLOAD="$PAYLOAD,\"transcriptPath\":\"$TRANSCRIPT_PATH\""
-fi
-
-# Extract agent transcript path (for subagents)
-AGENT_TRANSCRIPT=$(echo "$INPUT" | /usr/bin/jq -r '.agent_transcript_path // empty' 2>/dev/null)
-if [ -n "$AGENT_TRANSCRIPT" ]; then
-    PAYLOAD="$PAYLOAD,\"agentTranscriptPath\":\"$AGENT_TRANSCRIPT\""
-fi
-
-# Extract attachments (for beforeReadFile, beforeSubmitPrompt)
-ATTACHMENTS=$(echo "$INPUT" | /usr/bin/jq -c '.attachments // empty' 2>/dev/null)
-if [ -n "$ATTACHMENTS" ] && [ "$ATTACHMENTS" != "null" ] && [ "$ATTACHMENTS" != "[]" ]; then
-    PAYLOAD="$PAYLOAD,\"attachments\":$ATTACHMENTS"
-fi
-
-# Extract thinking info (for afterAgentThought)
-THINKING_TEXT=$(echo "$INPUT" | /usr/bin/jq -r '.text // empty' 2>/dev/null)
-if [ -n "$THINKING_TEXT" ] && [ "$EVENT_KIND" = "thinkingEnd" ]; then
-    ESCAPED_THINKING=$(echo "$THINKING_TEXT" | head -c 500 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"thinkingText\":\"$ESCAPED_THINKING\""
-fi
-
-THINKING_DURATION=$(echo "$INPUT" | /usr/bin/jq -r '.duration_ms // empty' 2>/dev/null)
-if [ -n "$THINKING_DURATION" ] && [ "$THINKING_DURATION" != "null" ]; then
-    PAYLOAD="$PAYLOAD,\"thinkingDurationMs\":$THINKING_DURATION"
-fi
-
-# Extract response text (for afterAgentResponse)
-RESPONSE_TEXT=$(echo "$INPUT" | /usr/bin/jq -r '.text // empty' 2>/dev/null)
-if [ -n "$RESPONSE_TEXT" ] && [ "$EVENT_KIND" = "agentResponse" ]; then
-    ESCAPED_RESPONSE=$(echo "$RESPONSE_TEXT" | head -c 300 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
-    PAYLOAD="$PAYLOAD,\"responseText\":\"$ESCAPED_RESPONSE\""
-fi
-
-# Extract context compaction info (for preCompact)
-CONTEXT_PERCENT=$(echo "$INPUT" | /usr/bin/jq -r '.context_usage_percent // empty' 2>/dev/null)
-if [ -n "$CONTEXT_PERCENT" ]; then
-    PAYLOAD="$PAYLOAD,\"contextUsagePercent\":$CONTEXT_PERCENT"
-fi
-
-CONTEXT_TOKENS=$(echo "$INPUT" | /usr/bin/jq -r '.context_tokens // empty' 2>/dev/null)
-if [ -n "$CONTEXT_TOKENS" ]; then
-    PAYLOAD="$PAYLOAD,\"contextTokens\":$CONTEXT_TOKENS"
-fi
-
-MESSAGES_COMPACT=$(echo "$INPUT" | /usr/bin/jq -r '.messages_to_compact // empty' 2>/dev/null)
-if [ -n "$MESSAGES_COMPACT" ]; then
-    PAYLOAD="$PAYLOAD,\"messagesToCompact\":$MESSAGES_COMPACT"
-fi
-
-# Close the JSON object
-PAYLOAD="$PAYLOAD}"
 
 # Log for debugging (truncated)
-TOOL_LOG="${TOOL_NAME:-session}"
+TOOL_LOG=$(echo "$PAYLOAD" | /usr/bin/jq -r '.toolName // .hookEventName // "session"' 2>/dev/null)
 LOG_MSG="$(date): [$EVENT_KIND] $TOOL_LOG run=${RUN_ID:0:8}"
-if [ -n "$AGENT_ID" ]; then
-    LOG_MSG="$LOG_MSG agent=${AGENT_ID:0:8}"
-fi
-if [ -n "$SPAN_ID" ]; then
-    LOG_MSG="$LOG_MSG span=${SPAN_ID:0:8}"
-fi
+AGENT_ID_SHORT=$(echo "$PAYLOAD" | /usr/bin/jq -r '.agentId // empty' 2>/dev/null)
+SPAN_ID_SHORT=$(echo "$PAYLOAD" | /usr/bin/jq -r '.spanId // empty' 2>/dev/null)
+if [ -n "$AGENT_ID_SHORT" ]; then LOG_MSG="$LOG_MSG agent=${AGENT_ID_SHORT:0:8}"; fi
+if [ -n "$SPAN_ID_SHORT" ]; then LOG_MSG="$LOG_MSG span=${SPAN_ID_SHORT:0:8}"; fi
 echo "$LOG_MSG" >> "$LOG_FILE"
 
 # Debug: log the payload we're sending

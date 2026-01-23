@@ -53,8 +53,47 @@ const demoGenerator = new DemoGenerator(traceStore, PROJECT_ROOT);
 
 // Debug mode - on by default, disable via /api/debug/disable
 let debugTelemetry = process.env.DEBUG_TELEMETRY !== '0';
+traceStore.setDebugTelemetry(debugTelemetry);
 const recentRawEvents: Array<{ ts: number; raw: unknown; normalized: TelemetryEvent }> = [];
 const MAX_DEBUG_EVENTS = 100;
+
+const DEBUG_DIR = path.join(PROJECT_ROOT, '.codemap', 'debug');
+
+function ensureDebugDir(): void {
+  if (!fs.existsSync(DEBUG_DIR)) {
+    fs.mkdirSync(DEBUG_DIR, { recursive: true });
+  }
+}
+
+function safeJsonlAppend(filePath: string, entry: unknown): void {
+  try {
+    fs.appendFileSync(filePath, JSON.stringify(entry) + '\n');
+  } catch (err) {
+    // Debug logging must never break ingestion
+    console.error('[Debug] Failed to append debug log:', err);
+  }
+}
+
+function readTailLines(filePath: string, maxBytes: number, maxLines: number): string[] {
+  if (!fs.existsSync(filePath)) return [];
+  const st = fs.statSync(filePath);
+  if (!st.isFile()) return [];
+
+  const size = st.size;
+  const bytesToRead = Math.min(size, maxBytes);
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buf, 0, bytesToRead, size - bytesToRead);
+    const text = buf.toString('utf-8');
+    const lines = text.split('\n').filter(Boolean);
+    return lines.slice(-maxLines);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+ensureDebugDir();
 
 /**
  * POST /api/telemetry
@@ -78,6 +117,32 @@ app.post('/api/telemetry', (req, res) => {
       if (recentRawEvents.length > MAX_DEBUG_EVENTS) {
         recentRawEvents.shift();
       }
+    }
+
+    // Persist debug snapshots on disk (JSONL), when enabled
+    if (debugTelemetry) {
+      safeJsonlAppend(path.join(DEBUG_DIR, 'telemetry.jsonl'), {
+        ts: Date.now(),
+        rawKeys: raw && typeof raw === 'object' ? Object.keys(raw as Record<string, unknown>) : undefined,
+        normalized: {
+          eventKind: event.eventKind,
+          timestamp: event.timestamp,
+          runId: event.runId,
+          agentId: event.agentId,
+          parentAgentId: event.parentAgentId,
+          spanId: event.spanId,
+          parentSpanId: event.parentSpanId,
+          toolName: event.toolName,
+          hookEventName: event.hookEventName,
+          turnId: event.turnId,
+          duration: event.duration,
+          durationMs: event.durationMs,
+          failureType: event.failureType,
+          errorMessage: event.errorMessage,
+          source: event.source,
+          agentType: event.agentType,
+        },
+      });
     }
     
     // Enhanced logging
@@ -477,6 +542,7 @@ app.get('/api/health', (_req, res) => {
  */
 app.post('/api/debug/enable', (_req, res) => {
   debugTelemetry = true;
+  traceStore.setDebugTelemetry(true);
   console.log('[Debug] Telemetry debugging ENABLED');
   res.json({ debugTelemetry: true });
 });
@@ -487,6 +553,7 @@ app.post('/api/debug/enable', (_req, res) => {
  */
 app.post('/api/debug/disable', (_req, res) => {
   debugTelemetry = false;
+  traceStore.setDebugTelemetry(false);
   console.log('[Debug] Telemetry debugging DISABLED');
   res.json({ debugTelemetry: false });
 });
@@ -514,6 +581,41 @@ app.get('/api/debug/events/raw', (req, res) => {
   const limit = parseInt(req.query.limit as string) || 20;
   const events = recentRawEvents.slice(-limit).map(e => e.raw);
   res.json(events);
+});
+
+/**
+ * GET /api/debug/logs
+ * Read recent debug JSONL entries from disk.
+ *
+ * Query params:
+ * - file: "telemetry" | "events" | "unmatched"  (default: "telemetry")
+ * - limit: number (default: 100)
+ */
+app.get('/api/debug/logs', (req, res) => {
+  const file = (req.query.file as string) || 'telemetry';
+  const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+
+  const allowed = new Set(['telemetry', 'events', 'unmatched']);
+  if (!allowed.has(file)) {
+    res.status(400).json({ error: 'Invalid file. Use telemetry, events, or unmatched.' });
+    return;
+  }
+
+  const filePath = path.join(DEBUG_DIR, `${file}.jsonl`);
+  try {
+    const lines = readTailLines(filePath, 512 * 1024, limit);
+    const entries = lines.map(line => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return { parseError: true, line };
+      }
+    });
+    res.json({ file, path: filePath, count: entries.length, entries });
+  } catch (err) {
+    console.error('[Debug] Failed to read debug logs:', err);
+    res.status(500).json({ error: 'Failed to read debug logs' });
+  }
 });
 
 // ============================================================================

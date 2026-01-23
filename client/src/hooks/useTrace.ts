@@ -59,6 +59,29 @@ export function useTrace(): UseTraceResult {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number>();
   
+  const isTaskCallRun = (runId: string) => runId.startsWith('task-call_');
+
+  const pickBestDefaultRun = (runs: RunSummary[]): string | null => {
+    if (runs.length === 0) return null;
+
+    const score = (r: RunSummary) => {
+      // Prefer the "main" run (UUID-ish) over per-task/subagent runs.
+      // Then prefer runs with actual activity (spans/agents), then recency.
+      const spanCount = r.spanCount ?? 0;
+      const agentCount = r.agentCount ?? 0;
+
+      let s = 0;
+      if (r.status === 'running') s += 10_000;
+      if (!isTaskCallRun(r.runId)) s += 5_000;
+      s += spanCount * 50;
+      s += agentCount * 200;
+      s += Math.floor((r.startedAt ?? 0) / 1000); // stable tie-breaker by recency
+      return s;
+    };
+
+    return [...runs].sort((a, b) => score(b) - score(a))[0].runId;
+  };
+
   // Fetch recent runs
   const refreshRuns = useCallback(async () => {
     try {
@@ -66,10 +89,10 @@ export function useTrace(): UseTraceResult {
       const runs: RunSummary[] = await res.json();
       setRecentRuns(runs);
       
-      // Auto-select the most recent running run, or the first run
+      // Auto-select a "best" run (avoid task-call subagent runs by default)
       if (!selectedRunId && runs.length > 0) {
-        const runningRun = runs.find(r => r.status === 'running');
-        setSelectedRunId(runningRun?.runId || runs[0].runId);
+        const best = pickBestDefaultRun(runs);
+        setSelectedRunId(best || runs[0].runId);
       }
     } catch (err) {
       console.error('Failed to fetch runs:', err);
@@ -79,13 +102,14 @@ export function useTrace(): UseTraceResult {
   // Load spans for a specific run
   const loadRunData = useCallback(async (runId: string) => {
     try {
+      const encodedRunId = encodeURIComponent(runId);
       // Fetch run details
-      const detailsRes = await fetch(`${API_URL}/runs/${runId}`);
+      const detailsRes = await fetch(`${API_URL}/runs/${encodedRunId}`);
       if (!detailsRes.ok) return;
       const details: RunDetails = await detailsRes.json();
       
       // Fetch spans
-      const spansRes = await fetch(`${API_URL}/runs/${runId}/spans`);
+      const spansRes = await fetch(`${API_URL}/runs/${encodedRunId}/spans`);
       if (!spansRes.ok) return;
       const spansData: SpanListResponse = await spansRes.json();
       

@@ -36,6 +36,20 @@ const cursorHooksConfig = {
     postToolUse: [{ command: `${TELEMETRY_HOOK} toolEnd` }],
     postToolUseFailure: [{ command: `${TELEMETRY_HOOK} toolFailure` }],
     
+    // Shell execution (more detailed than generic tool hooks)
+    beforeShellExecution: [{ command: `${TELEMETRY_HOOK} shellStart` }],
+    afterShellExecution: [{ command: `${TELEMETRY_HOOK} shellEnd` }],
+    
+    // MCP execution
+    afterMCPExecution: [{ command: `${TELEMETRY_HOOK} mcpEnd` }],
+    
+    // File edits
+    afterFileEdit: [{ command: `${TELEMETRY_HOOK} fileEditEnd` }],
+    
+    // Tab file operations
+    beforeTabFileRead: [{ command: `${TELEMETRY_HOOK} tabReadStart` }],
+    afterTabFileEdit: [{ command: `${TELEMETRY_HOOK} tabEditEnd` }],
+    
     // Subagent lifecycle
     subagentStart: [{ command: `${TELEMETRY_HOOK} subagentStart` }],
     subagentStop: [{ command: `${TELEMETRY_HOOK} subagentStop` }],

@@ -197,6 +197,97 @@ describe('TraceStore', () => {
       expect(readSpan?.status).toBe('running');
     });
 
+    it('should not clobber toolName when the same spanId is updated', () => {
+      const t0 = Date.now();
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0,
+        runId: 'run-123',
+        spanId: 'span-1',
+        toolName: 'Grep',
+        toolInput: { pattern: 'foo' },
+      });
+
+      // Simulate a follow-up hook event that reuses spanId but carries a different toolName
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0 + 10,
+        runId: 'run-123',
+        spanId: 'span-1',
+        toolName: 'Read',
+        toolInput: { file_path: 'some/file.txt' },
+      });
+
+      const result = store.getSpans('run-123');
+      expect(result?.spans).toHaveLength(1);
+      expect(result?.spans[0].toolName).toBe('Grep');
+    });
+
+    it('should still complete a span on toolEnd if pendingSpans is missing but activeSpans has it', () => {
+      const t0 = Date.now();
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0,
+        runId: 'run-123',
+        spanId: 'span-1',
+        toolName: 'Read',
+      });
+
+      // Force a pendingSpans desync
+      (store as unknown as { pendingSpans: Map<string, unknown> }).pendingSpans.delete('span-1');
+
+      store.processEvent({
+        eventKind: 'toolEnd',
+        timestamp: t0 + 100,
+        runId: 'run-123',
+        spanId: 'span-1',
+        duration: 100,
+      });
+
+      const result = store.getSpans('run-123');
+      expect(result?.spans[0].status).toBe('ok');
+      expect(result?.spans[0].durationMs).toBe(100);
+      expect(result?.spans[0].endedAt).toBeDefined();
+    });
+
+    it('should complete the most recent matching running span when toolEnd has no spanId', () => {
+      const t0 = Date.now();
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0,
+        runId: 'run-123',
+        spanId: 'span-old',
+        toolName: 'Read',
+      });
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0 + 50,
+        runId: 'run-123',
+        spanId: 'span-new',
+        toolName: 'Read',
+      });
+
+      // End without spanId; should close span-new, not span-old
+      store.processEvent({
+        eventKind: 'toolEnd',
+        timestamp: t0 + 120,
+        runId: 'run-123',
+        toolName: 'Read',
+        duration: 70,
+      });
+
+      const result = store.getSpans('run-123');
+      const oldSpan = result?.spans.find(s => s.spanId === 'span-old');
+      const newSpan = result?.spans.find(s => s.spanId === 'span-new');
+
+      expect(newSpan?.status).toBe('ok');
+      expect(oldSpan?.status).toBe('running');
+    });
+
     it('should broadcast spanStart and spanEnd updates', () => {
       updates = []; // Clear previous updates
 

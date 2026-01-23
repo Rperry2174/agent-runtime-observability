@@ -49,11 +49,15 @@ export class TraceStore {
   private taskSpanToAgent: Map<string, string> = new Map();
   
   private tracesDir: string;
+  private debugDir: string;
+  private debugEnabled: boolean = process.env.DEBUG_TELEMETRY !== '0';
   private onUpdate: ((update: TraceUpdate) => void) | null = null;
 
   constructor(projectRoot: string) {
     this.tracesDir = path.join(projectRoot, '.codemap', 'traces');
+    this.debugDir = path.join(projectRoot, '.codemap', 'debug');
     this.ensureTracesDir();
+    this.ensureDebugDir();
     this.loadRecentRuns();
     
     // Periodic cleanup
@@ -64,6 +68,17 @@ export class TraceStore {
     if (!fs.existsSync(this.tracesDir)) {
       fs.mkdirSync(this.tracesDir, { recursive: true });
     }
+  }
+
+  private ensureDebugDir(): void {
+    if (!fs.existsSync(this.debugDir)) {
+      fs.mkdirSync(this.debugDir, { recursive: true });
+    }
+  }
+
+  /** Enable/disable debug JSONL logging */
+  setDebugTelemetry(enabled: boolean): void {
+    this.debugEnabled = enabled;
   }
 
   private loadRecentRuns(): void {
@@ -138,6 +153,18 @@ export class TraceStore {
     }
   }
 
+  private appendDebug(type: string, data: unknown): void {
+    if (!this.debugEnabled) return;
+    const filePath = path.join(this.debugDir, `${type}.jsonl`);
+    const line = JSON.stringify({ type, data, ts: Date.now() }) + '\n';
+    try {
+      fs.appendFileSync(filePath, line);
+    } catch (err) {
+      // Debug logging should never break ingestion
+      console.error(`[TraceStore] Failed to append debug ${type}:`, err);
+    }
+  }
+
   /** Set callback for real-time updates */
   setUpdateCallback(callback: (update: TraceUpdate) => void): void {
     this.onUpdate = callback;
@@ -157,6 +184,26 @@ export class TraceStore {
   processEvent(event: TelemetryEvent): void {
     const now = Date.now();
     const runId = event.runId || 'unknown';
+
+    // Lightweight debug event log (avoid persisting raw tool input/output)
+    this.appendDebug('events', {
+      eventKind: event.eventKind,
+      timestamp: event.timestamp,
+      runId: event.runId,
+      agentId: event.agentId,
+      parentAgentId: event.parentAgentId,
+      spanId: event.spanId,
+      parentSpanId: event.parentSpanId,
+      toolName: event.toolName,
+      hookEventName: event.hookEventName,
+      turnId: event.turnId,
+      duration: event.duration,
+      durationMs: event.durationMs,
+      failureType: event.failureType,
+      errorMessage: event.errorMessage,
+      source: event.source,
+      agentType: event.agentType,
+    });
     
     switch (event.eventKind) {
       case 'sessionStart':
@@ -195,6 +242,28 @@ export class TraceStore {
         break;
       case 'beforeSubmitPrompt':
         this.handleBeforeSubmitPrompt(event, now);
+        break;
+      // Shell execution hooks
+      case 'shellStart':
+        this.handleToolStart({ ...event, toolName: event.toolName || 'Shell' }, now);
+        break;
+      case 'shellEnd':
+        this.handleToolEnd({ ...event, toolName: event.toolName || 'Shell' }, now);
+        break;
+      // MCP execution hook
+      case 'mcpEnd':
+        this.handleToolEnd({ ...event, toolName: event.toolName || 'MCP' }, now);
+        break;
+      // File edit hooks
+      case 'fileEditEnd':
+        this.handleToolEnd({ ...event, toolName: event.toolName || 'Edit' }, now);
+        break;
+      // Tab file hooks
+      case 'tabReadStart':
+        this.handleToolStart({ ...event, toolName: event.toolName || 'TabRead' }, now);
+        break;
+      case 'tabEditEnd':
+        this.handleToolEnd({ ...event, toolName: event.toolName || 'TabEdit' }, now);
         break;
     }
   }
@@ -373,8 +442,12 @@ export class TraceStore {
         if (event.attachments) {
           existing.attachmentsUsed = event.attachments;
         }
+        // Do NOT clobber toolName for an existing span.
+        // Some hook events reuse spanId for metadata updates and may carry an unrelated toolName.
         if (event.toolName) {
-          existing.toolName = event.toolName;
+          if (existing.toolName === 'Unknown' || existing.toolName === event.toolName) {
+            existing.toolName = event.toolName;
+          }
         }
         this.appendToFile(runId, 'span', existing);
         this.broadcast({ type: 'spanUpdate', runId, span: existing });
@@ -430,25 +503,60 @@ export class TraceStore {
       if (this.pendingSpans.has(spanId)) {
         span = this.pendingSpans.get(spanId);
         this.pendingSpans.delete(spanId);
-      } else {
-        console.log(`[TraceStore] No pending span found for toolEnd: ${spanId}`);
-        return;
+      } else if (runId) {
+        // Fallback: pendingSpans can get out of sync; check active spans and historical list.
+        const activeMap = this.activeSpans.get(runId);
+        span = activeMap?.get(spanId);
+        if (!span) {
+          const runSpans = this.spans.get(runId) || [];
+          span = [...runSpans].reverse().find(s => s.spanId === spanId && s.status === 'running');
+        }
+        if (span) {
+          this.pendingSpans.delete(spanId);
+        } else {
+          this.appendDebug('unmatched', {
+            kind: 'toolEnd',
+            runId,
+            spanId,
+            toolName: event.toolName,
+            agentId: event.agentId,
+            hookEventName: event.hookEventName,
+            activeSpanCount: activeMap?.size ?? 0,
+          });
+          console.log(`[TraceStore] No pending span found for toolEnd: ${spanId}`);
+          return;
+        }
       }
     } else if (runId) {
       // Fallback only if no spanId is provided
       const activeMap = this.activeSpans.get(runId);
       if (activeMap) {
-        for (const [id, s] of activeMap) {
-          if (s.status === 'running' && (!event.toolName || s.toolName === event.toolName)) {
-            span = s;
-            this.pendingSpans.delete(id);
-            break;
-          }
+        const candidates = Array.from(activeMap.values()).filter(s => {
+          if (s.status !== 'running') return false;
+          if (event.toolName && s.toolName !== event.toolName) return false;
+          if (event.agentId && s.agentId !== event.agentId) return false;
+          return true;
+        });
+        span = candidates.sort((a, b) => b.startedAt - a.startedAt)[0];
+        if (span) {
+          this.pendingSpans.delete(span.spanId);
         }
       }
     }
     
     if (!span) {
+      if (runId) {
+        const activeMap = this.activeSpans.get(runId);
+        this.appendDebug('unmatched', {
+          kind: 'toolEnd',
+          runId,
+          spanId: spanId || null,
+          toolName: event.toolName,
+          agentId: event.agentId,
+          hookEventName: event.hookEventName,
+          activeSpanCount: activeMap?.size ?? 0,
+        });
+      }
       console.log(`[TraceStore] No pending span found for toolEnd: ${spanId || event.toolName}`);
       return;
     }
@@ -486,24 +594,62 @@ export class TraceStore {
       if (this.pendingSpans.has(spanId)) {
         span = this.pendingSpans.get(spanId);
         this.pendingSpans.delete(spanId);
-      } else {
-        console.log(`[TraceStore] No pending span found for toolFailure: ${spanId}`);
-        return;
+      } else if (runId) {
+        const activeMap = this.activeSpans.get(runId);
+        span = activeMap?.get(spanId);
+        if (!span) {
+          const runSpans = this.spans.get(runId) || [];
+          span = [...runSpans].reverse().find(s => s.spanId === spanId && s.status === 'running');
+        }
+        if (span) {
+          this.pendingSpans.delete(spanId);
+        } else {
+          this.appendDebug('unmatched', {
+            kind: 'toolFailure',
+            runId,
+            spanId,
+            toolName: event.toolName,
+            agentId: event.agentId,
+            hookEventName: event.hookEventName,
+            failureType: event.failureType,
+            errorMessage: event.errorMessage,
+            activeSpanCount: activeMap?.size ?? 0,
+          });
+          console.log(`[TraceStore] No pending span found for toolFailure: ${spanId}`);
+          return;
+        }
       }
     } else if (runId) {
       const activeMap = this.activeSpans.get(runId);
       if (activeMap) {
-        for (const [id, s] of activeMap) {
-          if (s.status === 'running' && (!event.toolName || s.toolName === event.toolName)) {
-            span = s;
-            this.pendingSpans.delete(id);
-            break;
-          }
+        const candidates = Array.from(activeMap.values()).filter(s => {
+          if (s.status !== 'running') return false;
+          if (event.toolName && s.toolName !== event.toolName) return false;
+          if (event.agentId && s.agentId !== event.agentId) return false;
+          return true;
+        });
+        span = candidates.sort((a, b) => b.startedAt - a.startedAt)[0];
+        if (span) {
+          this.pendingSpans.delete(span.spanId);
         }
       }
     }
     
     if (!span) {
+      if (runId) {
+        const activeMap = this.activeSpans.get(runId);
+        this.appendDebug('unmatched', {
+          kind: 'toolFailure',
+          runId,
+          spanId: spanId || null,
+          toolName: event.toolName,
+          agentId: event.agentId,
+          hookEventName: event.hookEventName,
+          failureType: event.failureType,
+          errorMessage: event.errorMessage,
+          activeSpanCount: activeMap?.size ?? 0,
+        });
+      }
       console.log(`[TraceStore] No pending span found for toolFailure: ${spanId || event.toolName}`);
       return;
     }
@@ -636,25 +782,74 @@ export class TraceStore {
     
     // Find the thinking span for this agent
     const activeMap = this.activeSpans.get(runId);
-    if (!activeMap) return;
-    
-    for (const [spanId, span] of activeMap) {
-      if (span.toolName === 'Thinking' && span.agentId === agentId && span.status === 'running') {
-        span.endedAt = event.timestamp || now;
-        span.status = 'ok';
-        span.durationMs = event.thinkingDurationMs || (span.endedAt - span.startedAt);
-        span.outputPreview = event.thinkingText?.slice(0, 200) + (event.thinkingText && event.thinkingText.length > 200 ? '...' : '');
-        
-        activeMap.delete(spanId);
-        this.pendingSpans.delete(spanId);
-        
-        this.appendToFile(runId, 'span', span);
-        this.broadcast({ type: 'spanEnd', runId, span });
-        
-        console.log(`[TraceStore] Thinking ended: ${span.durationMs}ms`);
-        break;
+    if (activeMap) {
+      for (const [spanId, span] of activeMap) {
+        if (span.toolName === 'Thinking' && span.agentId === agentId && span.status === 'running') {
+          span.endedAt = event.timestamp || now;
+          span.status = 'ok';
+          span.durationMs = event.thinkingDurationMs || (span.endedAt - span.startedAt);
+          span.outputPreview = this.sanitizePreview(event.thinkingText, 200);
+          
+          activeMap.delete(spanId);
+          this.pendingSpans.delete(spanId);
+          
+          this.appendToFile(runId, 'span', span);
+          this.broadcast({ type: 'spanEnd', runId, span });
+          
+          console.log(`[TraceStore] Thinking ended: ${span.durationMs}ms`);
+          return;
+        }
       }
     }
+
+    const durationMs = event.thinkingDurationMs || event.durationMs || event.duration;
+    if (!durationMs) return;
+
+    if (!this.runs.has(runId)) {
+      this.handleSessionStart({ ...event, eventKind: 'sessionStart' }, now);
+    }
+
+    const run = this.runs.get(runId);
+    if (!run) return;
+
+    if (!run.agents.has(agentId)) {
+      const agent: Agent = {
+        agentId,
+        runId,
+        displayName: this.getAgentDisplayName(event.source, run.agents.size + 1, event.agentType),
+        agentType: event.agentType,
+        model: event.model,
+        startedAt: event.timestamp || now,
+      };
+      run.agents.set(agentId, agent);
+      this.appendToFile(runId, 'agent', agent);
+      this.broadcast({ type: 'agentStart', runId, agent });
+    }
+
+    const endedAt = event.timestamp || now;
+    const startedAt = Math.max(endedAt - durationMs, run.startedAt);
+    const span: Span = {
+      spanId: event.spanId || uuidv4(),
+      runId,
+      agentId,
+      toolName: 'Thinking',
+      hookEventName: 'afterAgentThought',
+      startedAt,
+      endedAt,
+      durationMs: endedAt - startedAt,
+      status: 'ok',
+      outputPreview: this.sanitizePreview(event.thinkingText, 200),
+    };
+
+    const runSpans = this.spans.get(runId) || [];
+    runSpans.push(span);
+    this.spans.set(runId, runSpans);
+
+    this.appendToFile(runId, 'span', span);
+    this.broadcast({ type: 'spanStart', runId, span });
+    this.broadcast({ type: 'spanEnd', runId, span });
+
+    console.log(`[TraceStore] Thinking recorded: ${span.durationMs}ms`);
   }
 
   private handleContextCompact(event: TelemetryEvent, now: number): void {

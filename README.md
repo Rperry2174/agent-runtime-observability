@@ -36,10 +36,17 @@ Create/edit `<your-project>/.cursor/hooks.json`:
     "preToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolStart" }],
     "postToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolEnd" }],
     "postToolUseFailure": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolFailure" }],
+    "beforeShellExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh shellStart" }],
+    "afterShellExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh shellEnd" }],
+    "afterMCPExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh mcpEnd" }],
+    "afterFileEdit": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh fileEditEnd" }],
+    "beforeTabFileRead": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh tabReadStart" }],
+    "afterTabFileEdit": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh tabEditEnd" }],
     "subagentStart": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStart" }],
     "subagentStop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStop" }],
     "afterAgentThought": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh thinkingEnd" }],
     "beforeSubmitPrompt": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh beforeSubmitPrompt" }],
+    "preCompact": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh contextCompact" }],
     "stop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh stop" }]
   }
 }

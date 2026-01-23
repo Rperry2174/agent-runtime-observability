@@ -61,7 +61,7 @@ export function ObservabilityDashboard() {
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [, forceUpdate] = useState(0);
   const [demoLoading, setDemoLoading] = useState(false);
-  const [compactMode, setCompactMode] = useState(true);
+  const compactMode = true;
 
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [transcriptTitle, setTranscriptTitle] = useState<string>('');
@@ -89,7 +89,7 @@ export function ObservabilityDashboard() {
   }, [dataVersionRef]);
 
   // Get current data from refs
-  const agents = Array.from(agentsRef.current.values());
+  const agents = sortAgents(Array.from(agentsRef.current.values()));
   const spans = spansRef.current;
   const run = currentRunRef.current;
 
@@ -334,15 +334,6 @@ export function ObservabilityDashboard() {
                 <div style={styles.activityHeader}>
                   <h2 style={styles.activityTitle}>Agent Activity</h2>
                   <div style={styles.activityControls}>
-                    <button
-                      style={{
-                        ...styles.compactToggle,
-                        ...(compactMode ? styles.compactToggleActive : {}),
-                      }}
-                      onClick={() => setCompactMode(prev => !prev)}
-                    >
-                      Compact {compactMode ? 'On' : 'Off'}
-                    </button>
                     <div style={styles.legend}>
                       {TOOL_LEGEND.map(tool => (
                         <div key={tool.name} style={styles.legendItem}>
@@ -370,27 +361,31 @@ export function ObservabilityDashboard() {
                   </div>
 
                   {/* Agent swimlanes */}
-                  {agents.map(agent => {
-                    // Filter spans - exclude Task spans from parent agents since 
-                    // subagents have their own swimlanes
+                  {agents.map((agent, index) => {
+                    // Filter spans for this agent.
+                    // NOTE: We keep Task spans so parent agents show activity even when
+                    // subagent tool calls aren't attributable to subagent lanes.
                     const agentSpans = spans.filter(s => {
                       if (s.agentId !== agent.agentId) return false;
-                      // Keep Task spans only if we want to see them (could toggle this)
-                      // For cleaner visualization, exclude Task spans - subagent swimlane shows the work
-                      if (s.toolName === 'Task') return false;
                       return true;
                     });
                     const displaySpans: DisplaySpan[] = compactMode
                       ? buildCompactSpans(agentSpans, now, run?.projectRoot)
                       : agentSpans;
+                    if (displaySpans.length === 0) return null;
                     const isSubagent = !!agent.parentAgentId;
                     const parentAgent = getParentAgent(agent);
                     
+                    const groupKey = getAgentGroupKey(agent);
+                    const prevGroupKey = index > 0 ? getAgentGroupKey(agents[index - 1]) : null;
+                    const isGroupStart = groupKey !== prevGroupKey;
+
                     return (
                       <div 
                         key={agent.agentId} 
                         style={{
                           ...styles.swimlane,
+                          ...(isGroupStart && index > 0 ? styles.swimlaneGroupStart : {}),
                           ...(isSubagent ? styles.swimlaneIndented : {}),
                         }}
                       >
@@ -421,7 +416,7 @@ export function ObservabilityDashboard() {
                             <div style={{ ...styles.spanTrack, height: `${trackHeight}px` }}>
                               {spanLayouts.map(({ span, lane }) => {
                               const left = ((span.startedAt - timeStart) / duration) * 100;
-                              const end = span.endedAt || now;
+                              const end = getSpanEndTime(span, now);
                               const rawWidth = ((end - span.startedAt) / duration) * 100;
                               const width = Math.max(rawWidth, 1);
                               const category = getToolCategory(span.toolName);
@@ -527,7 +522,7 @@ export function ObservabilityDashboard() {
                     <div style={styles.inspectRow}>
                       <span style={styles.inspectLabel}>Duration</span>
                       <span style={styles.inspectValue}>
-                        {selectedSpan.durationMs ? `${(selectedSpan.durationMs / 1000).toFixed(1)}s` : 'Running...'}
+                        {formatSpanDuration(selectedSpan, now)}
                       </span>
                     </div>
 
@@ -651,6 +646,22 @@ function getToolIcon(toolName: string): string {
   return '⚡';
 }
 
+function getAgentGroupKey(agent: Agent): string {
+  const normalized = agent.displayName.replace(/\s+\d+$/, '').trim();
+  return normalized.toLowerCase();
+}
+
+function sortAgents(agents: Agent[]): Agent[] {
+  return [...agents].sort((a, b) => {
+    const aKey = getAgentGroupKey(a);
+    const bKey = getAgentGroupKey(b);
+    if (aKey < bKey) return -1;
+    if (aKey > bKey) return 1;
+    if (a.startedAt !== b.startedAt) return a.startedAt - b.startedAt;
+    return a.displayName.localeCompare(b.displayName);
+  });
+}
+
 function buildSpanLanes(spans: DisplaySpan[], now: number): {
   spanLayouts: Array<{ span: DisplaySpan; lane: number }>;
   laneCount: number;
@@ -660,7 +671,7 @@ function buildSpanLanes(spans: DisplaySpan[], now: number): {
   const spanLayouts: Array<{ span: DisplaySpan; lane: number }> = [];
 
   sorted.forEach(span => {
-    const end = span.endedAt || now;
+    const end = getSpanEndTime(span, now);
     let laneIndex = laneEnds.findIndex(laneEnd => span.startedAt >= laneEnd);
     if (laneIndex === -1) {
       laneIndex = laneEnds.length;
@@ -739,7 +750,7 @@ function buildCompactSpans(spans: Span[], now: number, projectRoot?: string): Di
     const normalizedPath = normalizePath(span.files?.[0], projectRoot) || '';
     const groupKey = `${span.toolName}:${normalizedPath}`;
     const start = span.startedAt;
-    const end = span.endedAt || now;
+    const end = getSpanEndTime(span, now);
 
     if (
       currentGroup &&
@@ -763,6 +774,31 @@ function buildCompactSpans(spans: Span[], now: number, projectRoot?: string): Di
 
   flushGroup();
   return result;
+}
+
+function getSpanEndTime(span: Pick<Span, 'endedAt' | 'startedAt' | 'durationMs' | 'status'>, now: number): number {
+  if (typeof span.endedAt === 'number') return span.endedAt;
+  // Some spans may be finalized without an explicit endedAt; fall back to durationMs.
+  if (span.status !== 'running' && typeof span.durationMs === 'number') {
+    return span.startedAt + span.durationMs;
+  }
+  return now;
+}
+
+function formatSpanDuration(span: Pick<Span, 'durationMs' | 'startedAt' | 'endedAt' | 'status'>, now: number): string {
+  const end = getSpanEndTime(span, now);
+  const isRunning = span.status === 'running' && typeof span.endedAt !== 'number';
+  const durationMs =
+    typeof span.durationMs === 'number'
+      ? span.durationMs
+      : typeof span.endedAt === 'number'
+        ? Math.max(0, span.endedAt - span.startedAt)
+        : isRunning
+          ? undefined
+          : Math.max(0, end - span.startedAt);
+
+  if (typeof durationMs !== 'number') return 'Running...';
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 function normalizePath(filePath?: string, projectRoot?: string): string | undefined {
@@ -1112,21 +1148,6 @@ const styles: Record<string, React.CSSProperties> = {
     height: '10px',
     borderRadius: '50%',
   },
-  compactToggle: {
-    padding: '6px 12px',
-    borderRadius: '999px',
-    border: '1px solid #334155',
-    backgroundColor: 'transparent',
-    color: '#94a3b8',
-    fontSize: '12px',
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  compactToggleActive: {
-    backgroundColor: '#1e293b',
-    color: '#e2e8f0',
-    borderColor: '#475569',
-  },
   
   // Timeline
   timeline: {
@@ -1154,6 +1175,9 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     marginBottom: '8px',
     minHeight: '32px',
+  },
+  swimlaneGroupStart: {
+    marginTop: '12px',
   },
   swimlaneIndented: {
     marginLeft: '16px',
