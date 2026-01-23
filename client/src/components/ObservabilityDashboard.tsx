@@ -394,15 +394,19 @@ export function ObservabilityDashboard() {
                           ...(isSubagent ? styles.swimlaneIndented : {}),
                         }}
                       >
-                        <div style={styles.agentInfo}>
+                        <div style={styles.agentInfo} title={agent.displayName}>
                           <div style={styles.agentNameRow}>
-                            <span style={styles.agentName} title={agent.displayName}>{agent.displayName}</span>
+                            <span style={styles.agentName}>
+                              {agent.displayName.length > 50 
+                                ? agent.displayName.slice(0, 50) + '…' 
+                                : agent.displayName}
+                            </span>
                             {isSubagent && (
                               <span style={styles.taskBadge}>TASK</span>
                             )}
-                          </div>
-                          <div style={styles.agentModel}>
-                            {agent.model?.replace('claude-', '').replace('-20250514', '') || 'unknown'}
+                            <span style={styles.agentModel}>
+                              {agent.model?.replace('claude-', '').replace('-20250514', '').replace('4.5-opus', '4.5o').replace('high-thinking', 'ht') || ''}
+                            </span>
                           </div>
                         </div>
                         
@@ -1135,9 +1139,9 @@ const styles: Record<string, React.CSSProperties> = {
   timeRuler: {
     display: 'flex',
     justifyContent: 'space-between',
-    marginBottom: '16px',
-    marginLeft: '220px',
-    fontSize: '12px',
+    marginBottom: '12px',
+    marginLeft: '392px',
+    fontSize: '11px',
     color: '#475569',
   },
   timeLabel: {
@@ -1147,48 +1151,52 @@ const styles: Record<string, React.CSSProperties> = {
   // Swimlane
   swimlane: {
     display: 'flex',
-    alignItems: 'flex-start',
-    marginBottom: '12px',
-    minHeight: '48px',
+    alignItems: 'center',
+    marginBottom: '8px',
+    minHeight: '32px',
   },
   swimlaneIndented: {
-    marginLeft: '20px',
+    marginLeft: '16px',
   },
   agentInfo: {
-    width: '200px',
+    width: '380px',
     flexShrink: 0,
-    paddingRight: '16px',
-    paddingTop: '4px',
+    paddingRight: '12px',
+    display: 'flex',
+    alignItems: 'center',
   },
   agentNameRow: {
     display: 'flex',
     alignItems: 'center',
-    gap: '8px',
-    marginBottom: '2px',
+    gap: '6px',
     minWidth: 0,
+    overflow: 'hidden',
   },
   agentName: {
-    fontSize: '15px',
+    fontSize: '13px',
     fontWeight: 500,
     color: '#f1f5f9',
-    lineHeight: 1.2,
+    whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    whiteSpace: 'normal',
-    maxHeight: '2.4em',
+    flexShrink: 1,
     minWidth: 0,
   },
   taskBadge: {
-    fontSize: '10px',
+    fontSize: '9px',
     fontWeight: 600,
-    padding: '2px 6px',
+    padding: '2px 5px',
     borderRadius: '4px',
     backgroundColor: '#ec4899',
     color: '#fff',
+    flexShrink: 0,
   },
   agentModel: {
-    fontSize: '13px',
+    fontSize: '11px',
     color: '#64748b',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    marginLeft: 'auto',
   },
   spanTrack: {
     flex: 1,
