@@ -296,9 +296,8 @@ export function ObservabilityDashboard() {
                           {agentSpans.map(span => {
                             const left = ((span.startedAt - timeStart) / duration) * 100;
                             const end = span.endedAt || Date.now();
-                            // Add small gap between spans (0.3% of timeline)
                             const rawWidth = ((end - span.startedAt) / duration) * 100;
-                            const width = Math.max(rawWidth - 0.3, 0.8);
+                            const width = Math.max(rawWidth, 1);
                             const category = getToolCategory(span.toolName);
                             const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
                             const isSelected = selectedSpan?.spanId === span.spanId;
@@ -310,8 +309,8 @@ export function ObservabilityDashboard() {
                                 onClick={() => setSelectedSpan(span)}
                                 style={{
                                   ...styles.span,
-                                  left: `${Math.max(0, left + 0.15)}%`,
-                                  width: `${Math.min(100 - left - 0.3, width)}%`,
+                                  left: `calc(${Math.max(0, left)}% + 2px)`,
+                                  width: `calc(${Math.min(100 - left, width)}% - 4px)`,
                                   backgroundColor: bgColor,
                                   boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 4px ${bgColor}` : 'none',
                                 }}

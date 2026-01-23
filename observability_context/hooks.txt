@@ -1,0 +1,58 @@
+Subagents (Tasks) in CC: We need more observability...
+I really like using subagents (especially in parallel) but I have found there is not enough observability into their approach, their initial instructions, their reasoning. Sometimes they start to execute tasks that seem to be in divergence of the main thread and it's a black box.
+
+Also, I have frequently had sessions where multiple agents are working in parallel and it takes just one agent to suggest a completely wrong file edit, and cancelling it will cancel all other agents too!
+
+Anyway just throwing it out there, would be nice if we had more granular control of subagents and insight into their processes.
+
+1
+·
+10
+u/Use-Paragon avatar
+Use-Paragon
+•
+Promoted
+
+Forcing customers to use your Zapier connector not only creates a terrible product experience and limits users to very simple use cases, it also hurts all the core metrics you care about. See how Zapier compares to building integrations natively with Paragon
+Learn More
+useparagon.com
+Thumbnail image: Forcing customers to use your Zapier connector not only creates a terrible product experience and limits users to very simple use cases, it also hurts all the core metrics you care about. See how Zapier compares to building integrations natively with Paragon
+Comments Section
+u/inventor_black avatar
+inventor_black
+•
+7mo ago
+That cancelling a singular agent feature would be useful.
+
+The lack of mid-task observability is what makes them fast. You can observe their tasks post by requesting them to document what they do in a designated file within a agents folder.
+
+
+2
+Budget_Map_3333
+OP
+•
+7mo ago
+Understood. Still, a bit more interaction per agent would be an interesting addition. Maybe a user prompt every a time a new agent is spawned with a brief summary of the agent's instructions and task outline for more transparency, allowing the user to accept or reject it before it begins executing.
+
+
+2
+u/inventor_black avatar
+inventor_black
+•
+7mo ago
+Oww! yeah like Ctrl+R to see the information.
+
+Hopefully Anthropic stumble across these suggestions :)
+
+2
+u/grs2024 avatar
+grs2024
+•
+7mo ago
+Parse jsonl file its live output
+
+1
+
+[deleted]
+•
+7mo ago
