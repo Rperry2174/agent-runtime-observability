@@ -29,6 +29,7 @@ export interface Run {
   status: RunStatus;
   source: AgentSource;
   projectRoot?: string;
+  transcriptPath?: string;  // Path to the conversation transcript file
   agents: Map<string, Agent>;
 }
 
@@ -43,6 +44,7 @@ export interface Agent {
   agentType?: string;  // e.g., 'generalPurpose', 'explore', 'shell'
   model?: string;
   parentAgentId?: string;  // For subagents spawned via Task
+  transcriptPath?: string;  // Path to subagent's transcript file
   startedAt: number;
   endedAt?: number;
 }
@@ -136,6 +138,8 @@ export interface TelemetryEvent {
   status?: string;  // For stop events: completed/aborted/error
   projectRoot?: string;
   workspaceRoots?: string[];
+  transcriptPath?: string;  // Path to conversation transcript
+  agentTranscriptPath?: string;  // Path to subagent transcript
   
   // Attachments (from beforeReadFile, beforeSubmitPrompt)
   attachments?: Array<{ type: 'file' | 'rule'; filePath: string }>;
@@ -180,6 +184,7 @@ export interface RunSummary {
 /** Full run details for /api/runs/:runId */
 export interface RunDetails extends RunSummary {
   projectRoot?: string;
+  transcriptPath?: string;
   agents: Agent[];
 }
 

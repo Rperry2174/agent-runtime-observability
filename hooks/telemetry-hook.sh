@@ -123,6 +123,18 @@ if [ -n "$PROJECT_ROOT" ]; then
     PAYLOAD="$PAYLOAD,\"projectRoot\":\"$PROJECT_ROOT\""
 fi
 
+# Extract transcript path (for browsing conversations)
+TRANSCRIPT_PATH=$(echo "$INPUT" | /usr/bin/jq -r '.transcript_path // empty' 2>/dev/null)
+if [ -n "$TRANSCRIPT_PATH" ]; then
+    PAYLOAD="$PAYLOAD,\"transcriptPath\":\"$TRANSCRIPT_PATH\""
+fi
+
+# Extract agent transcript path (for subagents)
+AGENT_TRANSCRIPT=$(echo "$INPUT" | /usr/bin/jq -r '.agent_transcript_path // empty' 2>/dev/null)
+if [ -n "$AGENT_TRANSCRIPT" ]; then
+    PAYLOAD="$PAYLOAD,\"agentTranscriptPath\":\"$AGENT_TRANSCRIPT\""
+fi
+
 # Extract attachments (for beforeReadFile, beforeSubmitPrompt)
 ATTACHMENTS=$(echo "$INPUT" | /usr/bin/jq -c '.attachments // empty' 2>/dev/null)
 if [ -n "$ATTACHMENTS" ] && [ "$ATTACHMENTS" != "null" ] && [ "$ATTACHMENTS" != "[]" ]; then

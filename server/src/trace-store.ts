@@ -191,6 +191,7 @@ export class TraceStore {
       // Run already exists - if this is a new agentId, add the agent
       const run = this.runs.get(runId)!;
       if (event.projectRoot) run.projectRoot = event.projectRoot;
+      if (event.transcriptPath && !run.transcriptPath) run.transcriptPath = event.transcriptPath;
       
       // Check if this is a new agent joining the run
       const agentId = event.agentId || runId;
@@ -222,6 +223,7 @@ export class TraceStore {
       status: 'running',
       source: event.source || 'unknown',
       projectRoot: event.projectRoot || event.workspaceRoots?.[0],
+      transcriptPath: event.transcriptPath,
       agents: new Map(),
     };
     
@@ -512,6 +514,11 @@ export class TraceStore {
     
     agent.endedAt = event.timestamp || now;
     
+    // Capture subagent transcript path
+    if (event.agentTranscriptPath) {
+      agent.transcriptPath = event.agentTranscriptPath;
+    }
+    
     this.appendToFile(runId, 'agent', agent);
     this.broadcast({ type: 'agentEnd', runId, agent });
     
@@ -651,6 +658,7 @@ export class TraceStore {
     return {
       ...summary,
       projectRoot: run.projectRoot,
+      transcriptPath: run.transcriptPath,
       agents: Array.from(run.agents.values()),
     };
   }

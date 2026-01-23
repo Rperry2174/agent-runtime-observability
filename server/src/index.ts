@@ -8,6 +8,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { createServer } from 'http';
 import { WebSocketManager } from './websocket.js';
 import { TraceStore } from './trace-store.js';
@@ -128,6 +129,10 @@ function normalizeEvent(body: Record<string, unknown>): TelemetryEvent {
   event.projectRoot = body.projectRoot as string;
   event.workspaceRoots = body.workspace_roots as string[];
   
+  // Transcript paths
+  event.transcriptPath = (body.transcriptPath || body.transcript_path) as string;
+  event.agentTranscriptPath = (body.agentTranscriptPath || body.agent_transcript_path) as string;
+  
   // Attachments
   event.attachments = body.attachments as TelemetryEvent['attachments'];
   
@@ -211,6 +216,93 @@ app.get('/api/runs/:runId/spans', (req, res) => {
   }
   
   res.json(result);
+});
+
+// ============================================================================
+// Transcript API
+// ============================================================================
+
+/**
+ * GET /api/runs/:runId/transcript
+ * 
+ * Get the conversation transcript for a run.
+ */
+app.get('/api/runs/:runId/transcript', (req, res) => {
+  const { runId } = req.params;
+  const details = traceStore.getRunDetails(runId);
+  
+  if (!details) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  
+  if (!details.transcriptPath) {
+    res.status(404).json({ error: 'No transcript available for this run' });
+    return;
+  }
+  
+  try {
+    if (!fs.existsSync(details.transcriptPath)) {
+      res.status(404).json({ error: 'Transcript file not found', path: details.transcriptPath });
+      return;
+    }
+    
+    const content = fs.readFileSync(details.transcriptPath, 'utf-8');
+    res.json({ 
+      runId,
+      path: details.transcriptPath,
+      content,
+    });
+  } catch (err) {
+    console.error('[Transcript] Error reading file:', err);
+    res.status(500).json({ error: 'Failed to read transcript' });
+  }
+});
+
+/**
+ * GET /api/runs/:runId/agents/:agentId/transcript
+ * 
+ * Get the transcript for a specific subagent.
+ */
+app.get('/api/runs/:runId/agents/:agentId/transcript', (req, res) => {
+  const { runId, agentId } = req.params;
+  const details = traceStore.getRunDetails(runId);
+  
+  if (!details) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+  
+  const agent = details.agents.find(a => a.agentId === agentId);
+  
+  if (!agent) {
+    res.status(404).json({ error: 'Agent not found' });
+    return;
+  }
+  
+  if (!agent.transcriptPath) {
+    res.status(404).json({ error: 'No transcript available for this agent' });
+    return;
+  }
+  
+  try {
+    if (!fs.existsSync(agent.transcriptPath)) {
+      res.status(404).json({ error: 'Transcript file not found', path: agent.transcriptPath });
+      return;
+    }
+    
+    const content = fs.readFileSync(agent.transcriptPath, 'utf-8');
+    res.json({ 
+      runId,
+      agentId,
+      agentName: agent.displayName,
+      path: agent.transcriptPath,
+      content,
+    });
+  } catch (err) {
+    console.error('[Transcript] Error reading agent transcript:', err);
+    res.status(500).json({ error: 'Failed to read transcript' });
+  }
 });
 
 // ============================================================================
