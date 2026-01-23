@@ -33,6 +33,8 @@ const TOOL_LEGEND: { name: string; category: ToolCategory }[] = [
   { name: 'MCP', category: 'mcp' },
 ];
 
+const SPAN_TRACK_BG = '#0a0a0f';
+
 // ============================================================================
 // Main Component
 // ============================================================================
@@ -293,37 +295,51 @@ export function ObservabilityDashboard() {
                         </div>
                         
                         <div style={styles.spanTrack}>
-                          {agentSpans.map(span => {
-                            const left = ((span.startedAt - timeStart) / duration) * 100;
-                            const end = span.endedAt || Date.now();
-                            const rawWidth = ((end - span.startedAt) / duration) * 100;
-                            const width = Math.max(rawWidth, 1);
-                            const category = getToolCategory(span.toolName);
-                            const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
-                            const isSelected = selectedSpan?.spanId === span.spanId;
-                            const bgColor = isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category];
-                            
-                            return (
-                              <div
-                                key={span.spanId}
-                                onClick={() => setSelectedSpan(span)}
-                                style={{
-                                  ...styles.span,
-                                  left: `calc(${Math.max(0, left)}% + 2px)`,
-                                  width: `calc(${Math.min(100 - left, width)}% - 4px)`,
-                                  backgroundColor: bgColor,
-                                  boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 4px ${bgColor}` : 'none',
-                                }}
-                                title={`${span.toolName} (${span.status})`}
-                              >
-                                {width > 5 && (
-                                  <span style={styles.spanLabel}>
-                                    {span.toolName.replace('mcp:', '').replace('context7/', '')}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
+                          {[...agentSpans]
+                            // Render longer spans underneath shorter ones (better click behavior when they overlap)
+                            .sort((a, b) => {
+                              const endA = a.endedAt || now;
+                              const endB = b.endedAt || now;
+                              const durA = endA - a.startedAt;
+                              const durB = endB - b.startedAt;
+                              return durB - durA;
+                            })
+                            .map(span => {
+                              const left = ((span.startedAt - timeStart) / duration) * 100;
+                              const end = span.endedAt || now;
+                              const rawWidth = ((end - span.startedAt) / duration) * 100;
+                              const width = Math.max(rawWidth, 1);
+                              const category = getToolCategory(span.toolName);
+                              const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
+                              const isSelected = selectedSpan?.spanId === span.spanId;
+                              const bgColor = isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category];
+
+                              return (
+                                <div
+                                  key={span.spanId}
+                                  onClick={() => setSelectedSpan(span)}
+                                  style={{
+                                    ...styles.span,
+                                    left: `${Math.max(0, left)}%`,
+                                    width: `${Math.min(100 - left, width)}%`,
+                                    backgroundColor: bgColor,
+                                    // Draw separators inside the span so adjacent spans never "touch"
+                                    borderLeft: `2px solid ${SPAN_TRACK_BG}`,
+                                    borderRight: `2px solid ${SPAN_TRACK_BG}`,
+                                    backgroundClip: 'padding-box',
+                                    zIndex: isSelected ? 10 : 1,
+                                    boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 4px ${bgColor}` : 'none',
+                                  }}
+                                  title={`${span.toolName} (${span.status})`}
+                                >
+                                  {width > 5 && (
+                                    <span style={styles.spanLabel}>
+                                      {span.toolName.replace('mcp:', '').replace('context7/', '')}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
                         </div>
                       </div>
                     );
@@ -761,7 +777,7 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     position: 'relative',
     height: '28px',
-    backgroundColor: '#0a0a0f',
+    backgroundColor: SPAN_TRACK_BG,
     borderRadius: '6px',
   },
   span: {
