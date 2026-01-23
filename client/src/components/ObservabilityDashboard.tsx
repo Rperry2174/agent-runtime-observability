@@ -296,11 +296,13 @@ export function ObservabilityDashboard() {
                           {agentSpans.map(span => {
                             const left = ((span.startedAt - timeStart) / duration) * 100;
                             const end = span.endedAt || Date.now();
-                            const width = Math.max(((end - span.startedAt) / duration) * 100, 1);
+                            // Add small gap between spans (0.3% of timeline)
+                            const rawWidth = ((end - span.startedAt) / duration) * 100;
+                            const width = Math.max(rawWidth - 0.3, 0.8);
                             const category = getToolCategory(span.toolName);
                             const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
                             const isSelected = selectedSpan?.spanId === span.spanId;
-                            const isTask = span.toolName === 'Task';
+                            const bgColor = isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category];
                             
                             return (
                               <div
@@ -308,12 +310,10 @@ export function ObservabilityDashboard() {
                                 onClick={() => setSelectedSpan(span)}
                                 style={{
                                   ...styles.span,
-                                  left: `${Math.max(0, left)}%`,
-                                  width: `${Math.min(100 - left, width)}%`,
-                                  backgroundColor: isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category],
-                                  border: isSelected ? '2px solid white' : isTask ? '2px solid rgba(255,255,255,0.3)' : 'none',
-                                  borderRadius: isTask ? '6px' : '4px',
-                                  zIndex: isSelected ? 10 : isTask ? 5 : 1,
+                                  left: `${Math.max(0, left + 0.15)}%`,
+                                  width: `${Math.min(100 - left - 0.3, width)}%`,
+                                  backgroundColor: bgColor,
+                                  boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 4px ${bgColor}` : 'none',
                                 }}
                                 title={`${span.toolName} (${span.status})`}
                               >
@@ -775,7 +775,7 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    transition: 'opacity 0.1s',
+    transition: 'box-shadow 0.15s ease',
     boxSizing: 'border-box',
   },
   spanLabel: {
