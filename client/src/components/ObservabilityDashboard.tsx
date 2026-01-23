@@ -260,7 +260,15 @@ export function ObservabilityDashboard() {
 
                   {/* Agent swimlanes */}
                   {agents.map(agent => {
-                    const agentSpans = spans.filter(s => s.agentId === agent.agentId);
+                    // Filter spans - exclude Task spans from parent agents since 
+                    // subagents have their own swimlanes
+                    const agentSpans = spans.filter(s => {
+                      if (s.agentId !== agent.agentId) return false;
+                      // Keep Task spans only if we want to see them (could toggle this)
+                      // For cleaner visualization, exclude Task spans - subagent swimlane shows the work
+                      if (s.toolName === 'Task') return false;
+                      return true;
+                    });
                     const isSubagent = !!agent.parentAgentId;
                     const parentAgent = getParentAgent(agent);
                     
@@ -285,69 +293,38 @@ export function ObservabilityDashboard() {
                         </div>
                         
                         <div style={styles.spanTrack}>
-                          {(() => {
-                            // Calculate row assignments for overlapping spans
-                            const sortedSpans = [...agentSpans].sort((a, b) => a.startedAt - b.startedAt);
-                            const rows: { end: number }[] = [];
-                            const spanRows = new Map<string, number>();
-                            
-                            for (const span of sortedSpans) {
-                              const spanEnd = span.endedAt || Date.now();
-                              // Find a row where this span fits
-                              let assignedRow = rows.findIndex(r => r.end <= span.startedAt);
-                              if (assignedRow === -1) {
-                                assignedRow = rows.length;
-                                rows.push({ end: spanEnd });
-                              } else {
-                                rows[assignedRow].end = spanEnd;
-                              }
-                              spanRows.set(span.spanId, assignedRow);
-                            }
-                            
-                            const rowCount = Math.max(rows.length, 1);
-                            const rowHeight = 20;
-                            const trackHeight = rowCount * rowHeight + 8;
+                          {agentSpans.map(span => {
+                            const left = ((span.startedAt - timeStart) / duration) * 100;
+                            const end = span.endedAt || Date.now();
+                            const width = Math.max(((end - span.startedAt) / duration) * 100, 1);
+                            const category = getToolCategory(span.toolName);
+                            const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
+                            const isSelected = selectedSpan?.spanId === span.spanId;
+                            const isTask = span.toolName === 'Task';
                             
                             return (
-                              <div style={{ ...styles.spanTrackInner, height: `${trackHeight}px` }}>
-                                {agentSpans.map(span => {
-                                  const left = ((span.startedAt - timeStart) / duration) * 100;
-                                  const end = span.endedAt || Date.now();
-                                  const width = Math.max(((end - span.startedAt) / duration) * 100, 0.8);
-                                  const category = getToolCategory(span.toolName);
-                                  const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
-                                  const isSelected = selectedSpan?.spanId === span.spanId;
-                                  const isTask = span.toolName === 'Task';
-                                  const row = spanRows.get(span.spanId) || 0;
-                                  
-                                  return (
-                                    <div
-                                      key={span.spanId}
-                                      onClick={() => setSelectedSpan(span)}
-                                      style={{
-                                        ...styles.span,
-                                        left: `${Math.max(0, left)}%`,
-                                        width: `${Math.min(100 - left, width)}%`,
-                                        top: `${4 + row * rowHeight}px`,
-                                        height: `${rowHeight - 4}px`,
-                                        backgroundColor: isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category],
-                                        border: isSelected ? '2px solid white' : isTask ? '2px solid rgba(255,255,255,0.3)' : 'none',
-                                        borderRadius: isTask ? '6px' : '3px',
-                                        zIndex: isSelected ? 10 : isTask ? 5 : 1,
-                                      }}
-                                      title={`${span.toolName} (${span.status})`}
-                                    >
-                                      {width > 5 && (
-                                        <span style={styles.spanLabel}>
-                                          {span.toolName.replace('mcp:', '').replace('context7/', '')}
-                                        </span>
-                                      )}
-                                    </div>
-                                  );
-                                })}
+                              <div
+                                key={span.spanId}
+                                onClick={() => setSelectedSpan(span)}
+                                style={{
+                                  ...styles.span,
+                                  left: `${Math.max(0, left)}%`,
+                                  width: `${Math.min(100 - left, width)}%`,
+                                  backgroundColor: isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category],
+                                  border: isSelected ? '2px solid white' : isTask ? '2px solid rgba(255,255,255,0.3)' : 'none',
+                                  borderRadius: isTask ? '6px' : '4px',
+                                  zIndex: isSelected ? 10 : isTask ? 5 : 1,
+                                }}
+                                title={`${span.toolName} (${span.status})`}
+                              >
+                                {width > 5 && (
+                                  <span style={styles.spanLabel}>
+                                    {span.toolName.replace('mcp:', '').replace('context7/', '')}
+                                  </span>
+                                )}
                               </div>
                             );
-                          })()}
+                          })}
                         </div>
                       </div>
                     );
@@ -784,18 +761,14 @@ const styles: Record<string, React.CSSProperties> = {
   spanTrack: {
     flex: 1,
     position: 'relative',
-    minHeight: '32px',
+    height: '28px',
     backgroundColor: '#0a0a0f',
     borderRadius: '6px',
-    overflow: 'hidden',
-  },
-  spanTrackInner: {
-    position: 'relative',
-    width: '100%',
   },
   span: {
     position: 'absolute',
-    height: '16px',
+    top: '4px',
+    height: '20px',
     borderRadius: '4px',
     cursor: 'pointer',
     display: 'flex',
