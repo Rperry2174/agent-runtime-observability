@@ -127,9 +127,20 @@ export function ObservabilityDashboard() {
     return agentsRef.current.get(agent.parentAgentId);
   };
 
-  // Get the prompt/title from the first span's input or run metadata
+  // Get the prompt/title from run metadata
   const runTitle = run?.projectRoot?.split('/').pop() || 'Agent Run';
-  const runPrompt = spans.find(s => s.agentId === run?.runId && s.toolName === 'Task')?.inputPreview?.slice(0, 50) || 'Implement auth middleware';
+  
+  // Extract a clean prompt - avoid showing raw JSON
+  const getRunPrompt = () => {
+    if (!run) return 'Agent Session';
+    
+    // For demo runs, use a nice title
+    if (run.source === 'demo') return 'Implement auth middleware';
+    
+    // For real runs, show a generic title based on project
+    return `Session in ${runTitle}`;
+  };
+  const runPrompt = getRunPrompt();
 
   return (
     <div style={styles.container}>
@@ -141,13 +152,29 @@ export function ObservabilityDashboard() {
           <span style={styles.headerDivider}>/</span>
           <span style={styles.headerTitle}>Observability</span>
         </div>
-        <button 
-          style={styles.demoButton}
-          onClick={startDemo}
-          disabled={demoLoading}
-        >
-          {demoLoading ? '...' : '▷ Run Demo'}
-        </button>
+        <div style={styles.headerRight}>
+          {/* Run selector */}
+          {recentRuns.length > 0 && (
+            <select
+              value={selectedRunId || ''}
+              onChange={(e) => selectRun(e.target.value)}
+              style={styles.runSelector}
+            >
+              {recentRuns.map(r => (
+                <option key={r.runId} value={r.runId}>
+                  {r.source === 'demo' ? '🎬 Demo' : '🔴 Live'} - {new Date(r.startedAt).toLocaleTimeString()} ({r.spanCount} spans)
+                </option>
+              ))}
+            </select>
+          )}
+          <button 
+            style={styles.demoButton}
+            onClick={startDemo}
+            disabled={demoLoading}
+          >
+            {demoLoading ? '...' : '▷ Run Demo'}
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -258,37 +285,69 @@ export function ObservabilityDashboard() {
                         </div>
                         
                         <div style={styles.spanTrack}>
-                          {agentSpans.map(span => {
-                            const left = ((span.startedAt - timeStart) / duration) * 100;
-                            const end = span.endedAt || Date.now();
-                            const width = Math.max(((end - span.startedAt) / duration) * 100, 0.8);
-                            const category = getToolCategory(span.toolName);
-                            const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
-                            const isSelected = selectedSpan?.spanId === span.spanId;
-                            const isTask = span.toolName === 'Task';
+                          {(() => {
+                            // Calculate row assignments for overlapping spans
+                            const sortedSpans = [...agentSpans].sort((a, b) => a.startedAt - b.startedAt);
+                            const rows: { end: number }[] = [];
+                            const spanRows = new Map<string, number>();
+                            
+                            for (const span of sortedSpans) {
+                              const spanEnd = span.endedAt || Date.now();
+                              // Find a row where this span fits
+                              let assignedRow = rows.findIndex(r => r.end <= span.startedAt);
+                              if (assignedRow === -1) {
+                                assignedRow = rows.length;
+                                rows.push({ end: spanEnd });
+                              } else {
+                                rows[assignedRow].end = spanEnd;
+                              }
+                              spanRows.set(span.spanId, assignedRow);
+                            }
+                            
+                            const rowCount = Math.max(rows.length, 1);
+                            const rowHeight = 20;
+                            const trackHeight = rowCount * rowHeight + 8;
                             
                             return (
-                              <div
-                                key={span.spanId}
-                                onClick={() => setSelectedSpan(span)}
-                                style={{
-                                  ...styles.span,
-                                  left: `${Math.max(0, left)}%`,
-                                  width: `${Math.min(100 - left, width)}%`,
-                                  backgroundColor: isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category],
-                                  border: isSelected ? '2px solid white' : isTask ? '2px solid rgba(255,255,255,0.3)' : 'none',
-                                  borderRadius: isTask ? '6px' : '4px',
-                                }}
-                                title={`${span.toolName} (${span.status})`}
-                              >
-                                {width > 4 && (
-                                  <span style={styles.spanLabel}>
-                                    {span.toolName.replace('mcp:', '')}
-                                  </span>
-                                )}
+                              <div style={{ ...styles.spanTrackInner, height: `${trackHeight}px` }}>
+                                {agentSpans.map(span => {
+                                  const left = ((span.startedAt - timeStart) / duration) * 100;
+                                  const end = span.endedAt || Date.now();
+                                  const width = Math.max(((end - span.startedAt) / duration) * 100, 0.8);
+                                  const category = getToolCategory(span.toolName);
+                                  const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
+                                  const isSelected = selectedSpan?.spanId === span.spanId;
+                                  const isTask = span.toolName === 'Task';
+                                  const row = spanRows.get(span.spanId) || 0;
+                                  
+                                  return (
+                                    <div
+                                      key={span.spanId}
+                                      onClick={() => setSelectedSpan(span)}
+                                      style={{
+                                        ...styles.span,
+                                        left: `${Math.max(0, left)}%`,
+                                        width: `${Math.min(100 - left, width)}%`,
+                                        top: `${4 + row * rowHeight}px`,
+                                        height: `${rowHeight - 4}px`,
+                                        backgroundColor: isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category],
+                                        border: isSelected ? '2px solid white' : isTask ? '2px solid rgba(255,255,255,0.3)' : 'none',
+                                        borderRadius: isTask ? '6px' : '3px',
+                                        zIndex: isSelected ? 10 : isTask ? 5 : 1,
+                                      }}
+                                      title={`${span.toolName} (${span.status})`}
+                                    >
+                                      {width > 5 && (
+                                        <span style={styles.spanLabel}>
+                                          {span.toolName.replace('mcp:', '').replace('context7/', '')}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </div>
                             );
-                          })}
+                          })()}
                         </div>
                       </div>
                     );
@@ -514,6 +573,21 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '16px',
     color: '#94a3b8',
   },
+  headerRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  runSelector: {
+    padding: '8px 12px',
+    backgroundColor: '#1e293b',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    color: '#e2e8f0',
+    fontSize: '13px',
+    cursor: 'pointer',
+    minWidth: '200px',
+  },
   demoButton: {
     padding: '10px 20px',
     backgroundColor: 'transparent',
@@ -614,6 +688,10 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#111118',
     borderRadius: '16px',
     padding: '24px',
+    maxHeight: 'calc(100vh - 320px)',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
   },
   activityHeader: {
     display: 'flex',
@@ -648,6 +726,10 @@ const styles: Record<string, React.CSSProperties> = {
   // Timeline
   timeline: {
     position: 'relative',
+    flex: 1,
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    paddingRight: '8px',
   },
   timeRuler: {
     display: 'flex',
@@ -702,14 +784,18 @@ const styles: Record<string, React.CSSProperties> = {
   spanTrack: {
     flex: 1,
     position: 'relative',
-    height: '32px',
+    minHeight: '32px',
     backgroundColor: '#0a0a0f',
     borderRadius: '6px',
+    overflow: 'hidden',
+  },
+  spanTrackInner: {
+    position: 'relative',
+    width: '100%',
   },
   span: {
     position: 'absolute',
-    top: '4px',
-    height: '24px',
+    height: '16px',
     borderRadius: '4px',
     cursor: 'pointer',
     display: 'flex',
