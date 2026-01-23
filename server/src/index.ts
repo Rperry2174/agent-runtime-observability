@@ -45,7 +45,7 @@ traceStore.setUpdateCallback((update) => {
 });
 
 // Demo generator
-const demoGenerator = new DemoGenerator(traceStore);
+const demoGenerator = new DemoGenerator(traceStore, PROJECT_ROOT);
 
 // ============================================================================
 // Telemetry Ingest API
@@ -222,6 +222,29 @@ app.get('/api/runs/:runId/spans', (req, res) => {
 // Transcript API
 // ============================================================================
 
+const MAX_TRANSCRIPT_BYTES = 2 * 1024 * 1024; // 2MB
+
+function readTranscriptFile(filePath: string): { content: string; truncated: boolean; sizeBytes: number } {
+  const st = fs.statSync(filePath);
+  if (!st.isFile()) {
+    throw new Error('Transcript path is not a file');
+  }
+
+  const sizeBytes = st.size;
+  const truncated = sizeBytes > MAX_TRANSCRIPT_BYTES;
+  const bytesToRead = Math.min(sizeBytes, MAX_TRANSCRIPT_BYTES);
+
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(bytesToRead);
+    fs.readSync(fd, buf, 0, bytesToRead, 0);
+    const content = buf.toString('utf-8');
+    return { content, truncated, sizeBytes };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /**
  * GET /api/runs/:runId/transcript
  * 
@@ -247,11 +270,13 @@ app.get('/api/runs/:runId/transcript', (req, res) => {
       return;
     }
     
-    const content = fs.readFileSync(details.transcriptPath, 'utf-8');
+    const { content, truncated, sizeBytes } = readTranscriptFile(details.transcriptPath);
     res.json({ 
       runId,
       path: details.transcriptPath,
       content,
+      truncated,
+      sizeBytes,
     });
   } catch (err) {
     console.error('[Transcript] Error reading file:', err);
@@ -291,13 +316,15 @@ app.get('/api/runs/:runId/agents/:agentId/transcript', (req, res) => {
       return;
     }
     
-    const content = fs.readFileSync(agent.transcriptPath, 'utf-8');
+    const { content, truncated, sizeBytes } = readTranscriptFile(agent.transcriptPath);
     res.json({ 
       runId,
       agentId,
       agentName: agent.displayName,
       path: agent.transcriptPath,
       content,
+      truncated,
+      sizeBytes,
     });
   } catch (err) {
     console.error('[Transcript] Error reading agent transcript:', err);

@@ -19,6 +19,7 @@ export interface Agent {
   agentType?: string;
   model?: string;
   parentAgentId?: string;
+  transcriptPath?: string;
   startedAt: number;
   endedAt?: number;
 }
@@ -69,6 +70,7 @@ export interface RunSummary {
 
 export interface RunDetails extends RunSummary {
   projectRoot?: string;
+  transcriptPath?: string;
   agents: Agent[];
 }
 

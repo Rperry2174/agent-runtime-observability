@@ -206,6 +206,7 @@ export class TraceStore {
           displayName: customName || this.getAgentDisplayName(event.source, run.agents.size + 1, event.agentType),
           agentType: event.agentType,
           model: event.model,
+          transcriptPath: event.agentTranscriptPath || event.transcriptPath,
           startedAt: event.timestamp || now,
         };
         
@@ -239,6 +240,7 @@ export class TraceStore {
       displayName: customName || this.getAgentDisplayName(event.source, 1),
       agentType: event.agentType,
       model: event.model,
+      transcriptPath: event.transcriptPath,
       startedAt: event.timestamp || now,
     };
     
@@ -490,6 +492,7 @@ export class TraceStore {
       agentType: event.agentType,
       model: event.model,
       parentAgentId: event.parentAgentId || runId,
+      transcriptPath: event.agentTranscriptPath,
       startedAt: event.timestamp || now,
     };
     

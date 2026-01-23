@@ -34,6 +34,10 @@ const TOOL_LEGEND: { name: string; category: ToolCategory }[] = [
 ];
 
 const SPAN_TRACK_BG = '#0a0a0f';
+const SPAN_ROW_HEIGHT = 18;
+const SPAN_ROW_GAP = 4;
+const SPAN_TRACK_MIN_HEIGHT = 28;
+const API_URL = 'http://localhost:5174/api';
 
 // ============================================================================
 // Main Component
@@ -55,6 +59,13 @@ export function ObservabilityDashboard() {
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [, forceUpdate] = useState(0);
   const [demoLoading, setDemoLoading] = useState(false);
+
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [transcriptTitle, setTranscriptTitle] = useState<string>('');
+  const [transcriptPath, setTranscriptPath] = useState<string>('');
+  const [transcriptContent, setTranscriptContent] = useState<string>('');
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState<string | null>(null);
   
   const lastVersionRef = useRef(0);
   
@@ -105,6 +116,37 @@ export function ObservabilityDashboard() {
 
   const selectedAgent = selectedSpan ? agentsRef.current.get(selectedSpan.agentId) || null : null;
 
+  const openTranscript = async (opts: { agentId?: string; title: string }) => {
+    if (!selectedRunId) return;
+    setTranscriptOpen(true);
+    setTranscriptTitle(opts.title);
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    setTranscriptContent('');
+    setTranscriptPath('');
+
+    try {
+      const endpoint = opts.agentId
+        ? `${API_URL}/runs/${encodeURIComponent(selectedRunId)}/agents/${encodeURIComponent(opts.agentId)}/transcript`
+        : `${API_URL}/runs/${encodeURIComponent(selectedRunId)}/transcript`;
+      const res = await fetch(endpoint);
+      const data = await res.json();
+      if (!res.ok) {
+        setTranscriptError(data?.error || 'Failed to load transcript');
+        return;
+      }
+      setTranscriptPath(data?.path || '');
+      setTranscriptContent(data?.content || '');
+      if (data?.truncated) {
+        setTranscriptError(`Showing first ${(data?.content?.length || 0).toLocaleString()} chars of a ${(data?.sizeBytes || 0).toLocaleString()} byte file (truncated).`);
+      }
+    } catch (err) {
+      setTranscriptError('Failed to load transcript');
+    } finally {
+      setTranscriptLoading(false);
+    }
+  };
+
   // Start demo
   const startDemo = async () => {
     setDemoLoading(true);
@@ -146,6 +188,41 @@ export function ObservabilityDashboard() {
 
   return (
     <div style={styles.container}>
+      {/* Transcript Modal */}
+      {transcriptOpen && (
+        <div
+          style={styles.modalOverlay}
+          onClick={() => setTranscriptOpen(false)}
+        >
+          <div
+            style={styles.modal}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={styles.modalHeader}>
+              <div style={styles.modalTitleBlock}>
+                <div style={styles.modalTitle}>{transcriptTitle}</div>
+                {transcriptPath && <div style={styles.modalSubtitle}>{transcriptPath}</div>}
+              </div>
+              <button style={styles.modalCloseButton} onClick={() => setTranscriptOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            {transcriptLoading ? (
+              <div style={styles.modalBody}>Loading…</div>
+            ) : transcriptError && !transcriptContent ? (
+              <div style={styles.modalBody}>
+                <div style={styles.modalError}>{transcriptError}</div>
+              </div>
+            ) : (
+              <div style={styles.modalBody}>
+                {transcriptError && <div style={styles.modalWarning}>{transcriptError}</div>}
+                <pre style={styles.transcriptPre}>{transcriptContent}</pre>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* Header */}
       <header style={styles.header}>
         <div style={styles.headerLeft}>
@@ -201,6 +278,17 @@ export function ObservabilityDashboard() {
                 <span>{new Date(runSummary.startedAt).toLocaleString()}</span>
                 <span style={styles.metaDot}>•</span>
                 <span>via {runSummary.source === 'demo' ? 'Demo' : runSummary.source === 'cursor' ? 'Cursor' : 'Claude'}</span>
+                {run?.transcriptPath && (
+                  <>
+                    <span style={styles.metaDot}>•</span>
+                    <button
+                      style={styles.linkButton}
+                      onClick={() => openTranscript({ title: 'Conversation transcript' })}
+                    >
+                      View conversation
+                    </button>
+                  </>
+                )}
               </div>
 
               <div style={styles.statsGrid}>
@@ -284,7 +372,7 @@ export function ObservabilityDashboard() {
                       >
                         <div style={styles.agentInfo}>
                           <div style={styles.agentNameRow}>
-                            <span style={styles.agentName}>{agent.displayName}</span>
+                            <span style={styles.agentName} title={agent.displayName}>{agent.displayName}</span>
                             {isSubagent && (
                               <span style={styles.taskBadge}>TASK</span>
                             )}
@@ -294,17 +382,16 @@ export function ObservabilityDashboard() {
                           </div>
                         </div>
                         
-                        <div style={styles.spanTrack}>
-                          {[...agentSpans]
-                            // Render longer spans underneath shorter ones (better click behavior when they overlap)
-                            .sort((a, b) => {
-                              const endA = a.endedAt || now;
-                              const endB = b.endedAt || now;
-                              const durA = endA - a.startedAt;
-                              const durB = endB - b.startedAt;
-                              return durB - durA;
-                            })
-                            .map(span => {
+                        {(() => {
+                          const { spanLayouts, laneCount } = buildSpanLanes(agentSpans, now);
+                          const trackHeight = Math.max(
+                            SPAN_TRACK_MIN_HEIGHT,
+                            laneCount * (SPAN_ROW_HEIGHT + SPAN_ROW_GAP) + SPAN_ROW_GAP
+                          );
+
+                          return (
+                            <div style={{ ...styles.spanTrack, height: `${trackHeight}px` }}>
+                              {spanLayouts.map(({ span, lane }) => {
                               const left = ((span.startedAt - timeStart) / duration) * 100;
                               const end = span.endedAt || now;
                               const rawWidth = ((end - span.startedAt) / duration) * 100;
@@ -313,6 +400,7 @@ export function ObservabilityDashboard() {
                               const isError = span.status === 'error' || span.status === 'timeout' || span.status === 'permission_denied';
                               const isSelected = selectedSpan?.spanId === span.spanId;
                               const bgColor = isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category];
+                              const top = SPAN_ROW_GAP + lane * (SPAN_ROW_HEIGHT + SPAN_ROW_GAP);
 
                               return (
                                 <div
@@ -322,6 +410,8 @@ export function ObservabilityDashboard() {
                                     ...styles.span,
                                     left: `${Math.max(0, left)}%`,
                                     width: `${Math.min(100 - left, width)}%`,
+                                    top: `${top}px`,
+                                    height: `${SPAN_ROW_HEIGHT}px`,
                                     backgroundColor: bgColor,
                                     // Draw separators inside the span so adjacent spans never "touch"
                                     borderLeft: `2px solid ${SPAN_TRACK_BG}`,
@@ -339,8 +429,10 @@ export function ObservabilityDashboard() {
                                   )}
                                 </div>
                               );
-                            })}
-                        </div>
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     );
                   })}
@@ -388,6 +480,19 @@ export function ObservabilityDashboard() {
                         {selectedSpan.status}
                       </span>
                     </div>
+
+                    {/* Conversation */}
+                    {selectedAgent?.transcriptPath && (
+                      <div style={styles.inspectSection}>
+                        <div style={styles.inspectLabel}>Conversation</div>
+                        <button
+                          style={styles.linkButton}
+                          onClick={() => openTranscript({ agentId: selectedAgent.agentId, title: `${selectedAgent.displayName} transcript` })}
+                        >
+                          View {selectedAgent.displayName}
+                        </button>
+                      </div>
+                    )}
 
                     {/* Duration */}
                     <div style={styles.inspectRow}>
@@ -517,6 +622,32 @@ function getToolIcon(toolName: string): string {
   return '⚡';
 }
 
+function buildSpanLanes(spans: Span[], now: number): {
+  spanLayouts: Array<{ span: Span; lane: number }>;
+  laneCount: number;
+} {
+  const sorted = [...spans].sort((a, b) => a.startedAt - b.startedAt);
+  const laneEnds: number[] = [];
+  const spanLayouts: Array<{ span: Span; lane: number }> = [];
+
+  sorted.forEach(span => {
+    const end = span.endedAt || now;
+    let laneIndex = laneEnds.findIndex(laneEnd => span.startedAt >= laneEnd);
+    if (laneIndex === -1) {
+      laneIndex = laneEnds.length;
+      laneEnds.push(end);
+    } else {
+      laneEnds[laneIndex] = end;
+    }
+    spanLayouts.push({ span, lane: laneIndex });
+  });
+
+  return {
+    spanLayouts,
+    laneCount: Math.max(1, laneEnds.length),
+  };
+}
+
 // ============================================================================
 // Styles
 // ============================================================================
@@ -527,6 +658,102 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#0a0a0f',
     color: '#e2e8f0',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+
+  // Modal
+  modalOverlay: {
+    position: 'fixed',
+    inset: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    padding: '24px',
+  },
+  modal: {
+    width: 'min(1100px, 100%)',
+    maxHeight: '85vh',
+    backgroundColor: '#111118',
+    border: '1px solid #1e293b',
+    borderRadius: '16px',
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  modalHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: '16px',
+    padding: '16px 16px 12px 16px',
+    borderBottom: '1px solid #1e293b',
+  },
+  modalTitleBlock: {
+    minWidth: 0,
+  },
+  modalTitle: {
+    fontSize: '16px',
+    fontWeight: 600,
+    color: '#f1f5f9',
+    marginBottom: '4px',
+  },
+  modalSubtitle: {
+    fontSize: '12px',
+    color: '#64748b',
+    fontFamily: 'monospace',
+    wordBreak: 'break-all',
+  },
+  modalCloseButton: {
+    padding: '8px 12px',
+    backgroundColor: 'transparent',
+    border: '1px solid #334155',
+    borderRadius: '8px',
+    color: '#e2e8f0',
+    fontSize: '13px',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
+  modalBody: {
+    padding: '16px',
+    overflow: 'auto',
+  },
+  modalError: {
+    padding: '12px',
+    backgroundColor: 'rgba(248, 113, 113, 0.1)',
+    border: '1px solid rgba(248, 113, 113, 0.3)',
+    borderRadius: '10px',
+    color: '#fca5a5',
+    fontSize: '13px',
+  },
+  modalWarning: {
+    padding: '10px 12px',
+    backgroundColor: 'rgba(251, 191, 36, 0.1)',
+    border: '1px solid rgba(251, 191, 36, 0.25)',
+    borderRadius: '10px',
+    color: '#fde68a',
+    fontSize: '12px',
+    marginBottom: '12px',
+  },
+  transcriptPre: {
+    margin: 0,
+    whiteSpace: 'pre-wrap',
+    wordBreak: 'break-word',
+    fontSize: '13px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+    color: '#cbd5e1',
+    lineHeight: 1.5,
+  },
+
+  linkButton: {
+    padding: 0,
+    backgroundColor: 'transparent',
+    border: 'none',
+    color: '#60a5fa',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 500,
+    textDecoration: 'underline',
   },
   
   // Header
@@ -738,7 +965,7 @@ const styles: Record<string, React.CSSProperties> = {
   // Swimlane
   swimlane: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: '12px',
     minHeight: '48px',
   },
@@ -749,17 +976,23 @@ const styles: Record<string, React.CSSProperties> = {
     width: '140px',
     flexShrink: 0,
     paddingRight: '16px',
+    paddingTop: '4px',
   },
   agentNameRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
     marginBottom: '2px',
+    minWidth: 0,
   },
   agentName: {
     fontSize: '14px',
     fontWeight: 500,
     color: '#f1f5f9',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
   },
   taskBadge: {
     fontSize: '10px',
@@ -776,7 +1009,7 @@ const styles: Record<string, React.CSSProperties> = {
   spanTrack: {
     flex: 1,
     position: 'relative',
-    height: '28px',
+    minHeight: '28px',
     backgroundColor: SPAN_TRACK_BG,
     borderRadius: '6px',
   },

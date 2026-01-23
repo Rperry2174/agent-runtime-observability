@@ -6,6 +6,8 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
 import { TraceStore } from './trace-store.js';
 import { TelemetryEvent } from './types.js';
 
@@ -16,11 +18,13 @@ interface ScheduledEvent {
 
 export class DemoGenerator {
   private traceStore: TraceStore;
+  private projectRoot: string;
   private isRunning: boolean = false;
   private currentTimeout: NodeJS.Timeout | null = null;
 
-  constructor(traceStore: TraceStore) {
+  constructor(traceStore: TraceStore, projectRoot: string) {
     this.traceStore = traceStore;
+    this.projectRoot = projectRoot;
   }
 
   start(): string {
@@ -31,7 +35,8 @@ export class DemoGenerator {
 
     this.isRunning = true;
     const runId = `demo-${uuidv4().slice(0, 8)}`;
-    const events = this.generateComprehensiveScenario(runId);
+    const transcripts = this.fabricateDemoTranscripts(runId);
+    const events = this.generateComprehensiveScenario(runId, transcripts);
     
     console.log(`[Demo] Starting comprehensive run ${runId} with ${events.length} events over ${Math.round(events[events.length - 1].delayMs / 1000)}s`);
     
@@ -88,7 +93,13 @@ export class DemoGenerator {
    * - Spawns Shell subagent to run tests
    * - Shows thinking, MCP calls, errors
    */
-  private generateComprehensiveScenario(runId: string): ScheduledEvent[] {
+  private generateComprehensiveScenario(
+    runId: string,
+    transcripts: {
+      runTranscriptPath: string;
+      transcriptsDir: string;
+    }
+  ): ScheduledEvent[] {
     const events: ScheduledEvent[] = [];
     const now = Date.now();
     
@@ -102,6 +113,81 @@ export class DemoGenerator {
     const implAgentId = `impl-${uuidv4().slice(0, 8)}`;
     const shellAgentId = `shell-${uuidv4().slice(0, 8)}`;
     const reviewerId = `review-${uuidv4().slice(0, 8)}`;
+
+    // Fabricated per-agent transcripts for demo viewing
+    const agentTranscriptPaths: Record<string, string> = {
+      // Use the overall conversation transcript for the main agent
+      [leadAgentId]: transcripts.runTranscriptPath,
+    };
+    const writeAgentTranscript = (agentId: string, title: string, contentLines: string[]) => {
+      const filename = `agent-${agentId}.md`;
+      const p = path.join(transcripts.transcriptsDir, filename);
+      fs.writeFileSync(
+        p,
+        [
+          `# ${title}`,
+          '',
+          ...contentLines,
+          '',
+          '---',
+          '',
+          '_This is a fabricated transcript for demo purposes._',
+        ].join('\n'),
+        'utf-8'
+      );
+      agentTranscriptPaths[agentId] = p;
+      return p;
+    };
+
+    writeAgentTranscript(exploreAgentId, 'Explore Subagent Transcript', [
+      '**System:** Task: Codebase exploration',
+      '',
+      '**Assistant:** I’ll find auth/JWT usage and report back relevant files and patterns.',
+      '',
+      '- Searched for `jwt|bearer|token` in `src/`',
+      '- Searched for `authenticate|authorize` in `src/`',
+      '- Read `src/utils/jwt.ts` and `src/config/auth.ts`',
+      '',
+      '**Assistant:** Summary: Codebase uses `jsonwebtoken`; auth config lives in `src/config/auth.ts`.',
+    ]);
+
+    writeAgentTranscript(implAgentId, 'Implementation Subagent Transcript', [
+      '**System:** Task: Auth implementation',
+      '',
+      '**Assistant:** I’ll implement JWT validation middleware and export it from `src/middleware/index.ts`.',
+      '',
+      '- Read types in `src/types/express.d.ts`',
+      '- Wrote `src/middleware/auth.ts`',
+      '- Updated exports in `src/middleware/index.ts`',
+      '- Looked up jsonwebtoken best practices (Context7)',
+      '',
+      '**Assistant:** Done. Middleware validates Bearer token, returns 401 on invalid token, attaches user to request.',
+    ]);
+
+    writeAgentTranscript(shellAgentId, 'Shell Subagent Transcript', [
+      '**System:** Task: Test runner',
+      '',
+      '**Assistant:** Running typecheck and auth-related tests.',
+      '',
+      '1) `npx tsc --noEmit` → OK',
+      '2) `npm test -- --grep "auth"` → FAIL (missing `JWT_SECRET`)',
+      '3) `JWT_SECRET=test npm test -- --grep "auth"` → PASS',
+      '',
+      '**Assistant:** Tests now pass with `JWT_SECRET` configured for test env.',
+    ]);
+
+    writeAgentTranscript(reviewerId, 'Reviewer Transcript', [
+      '**System:** Reviewing auth middleware for security.',
+      '',
+      '**Assistant:** Checked secret handling, error paths, and token verification.',
+      '',
+      '- Read `src/middleware/auth.ts`',
+      '- Grep for `process.env` usage in `src/`',
+      '- Attempted security scan (permission denied)',
+      '- Left approval review on PR',
+      '',
+      '**Assistant:** LGTM. Ensure `JWT_SECRET` is required in all environments.',
+    ]);
     
     // Span ID helper
     const span = () => uuidv4().slice(0, 12);
@@ -127,7 +213,9 @@ export class DemoGenerator {
       agentId: leadAgentId,
       model: 'claude-sonnet-4',
       projectRoot: '/demo/api-service',
-      toolInput: { displayName: 'Lead' },
+      // Main lane should represent the initial prompt that kicked off the run
+      toolInput: { displayName: 'Implement auth middleware' },
+      transcriptPath: transcripts.runTranscriptPath,
     });
     
     // ========================================================================
@@ -208,9 +296,10 @@ export class DemoGenerator {
       agentType: 'explore',
       model: 'claude-3.5-haiku',
       toolInput: { displayName: 'Explore' },
+      agentTranscriptPath: agentTranscriptPaths[exploreAgentId],
     });
     
-    // Explore agent: Multiple parallel searches
+    // Explore agent: Sequential searches
     const exploreGrep1 = span();
     add(8, {
       eventKind: 'toolStart',
@@ -222,7 +311,7 @@ export class DemoGenerator {
     });
     
     const exploreGrep2 = span();
-    add(8.2, {
+    add(9.6, {
       eventKind: 'toolStart',
       agentId: exploreAgentId,
       spanId: exploreGrep2,
@@ -237,7 +326,7 @@ export class DemoGenerator {
       spanId: exploreGrep1,
       duration: 1500,
     });
-    add(9.7, {
+    add(11.1, {
       eventKind: 'toolEnd',
       agentId: exploreAgentId,
       spanId: exploreGrep2,
@@ -246,7 +335,7 @@ export class DemoGenerator {
     
     // Explore: Read found files
     const exploreRead1 = span();
-    add(10, {
+    add(11.4, {
       eventKind: 'toolStart',
       agentId: exploreAgentId,
       spanId: exploreRead1,
@@ -254,7 +343,7 @@ export class DemoGenerator {
       toolName: 'Read',
       toolInput: { file_path: 'src/utils/jwt.ts' },
     });
-    add(11, {
+    add(12.4, {
       eventKind: 'toolEnd',
       agentId: exploreAgentId,
       spanId: exploreRead1,
@@ -262,7 +351,7 @@ export class DemoGenerator {
     });
     
     const exploreRead2 = span();
-    add(11.5, {
+    add(12.7, {
       eventKind: 'toolStart',
       agentId: exploreAgentId,
       spanId: exploreRead2,
@@ -270,7 +359,7 @@ export class DemoGenerator {
       toolName: 'Read',
       toolInput: { file_path: 'src/config/auth.ts' },
     });
-    add(12.5, {
+    add(13.7, {
       eventKind: 'toolEnd',
       agentId: exploreAgentId,
       spanId: exploreRead2,
@@ -278,29 +367,30 @@ export class DemoGenerator {
     });
     
     // Explore completes
-    add(13, {
+    add(14.2, {
       eventKind: 'subagentStop',
       agentId: exploreAgentId,
       status: 'completed',
+      agentTranscriptPath: agentTranscriptPaths[exploreAgentId],
     });
     
-    add(13, {
+    add(14.2, {
       eventKind: 'toolEnd',
       agentId: leadAgentId,
       spanId: taskExplore,
-      duration: 6000,
+      duration: 7200,
     });
     
     // ========================================================================
-    // Lead: Thinking after exploration (13-15s)
+    // Lead: Thinking after exploration (14.5-16s)
     // ========================================================================
-    add(13.5, {
+    add(14.5, {
       eventKind: 'thinkingStart',
       agentId: leadAgentId,
       spanId: span(),
     });
     
-    add(15, {
+    add(16, {
       eventKind: 'thinkingEnd',
       agentId: leadAgentId,
       thinkingDurationMs: 1500,
@@ -308,11 +398,11 @@ export class DemoGenerator {
     });
     
     // ========================================================================
-    // Lead spawns Implementation subagent (15-40s)
+    // Lead spawns Implementation subagent (16-40s)
     // ========================================================================
     
     const taskImpl = span();
-    add(16, {
+    add(16.5, {
       eventKind: 'toolStart',
       agentId: leadAgentId,
       spanId: taskImpl,
@@ -331,6 +421,7 @@ export class DemoGenerator {
       agentType: 'generalPurpose',
       model: 'claude-sonnet-4',
       toolInput: { displayName: 'Implementer' },
+      agentTranscriptPath: agentTranscriptPaths[implAgentId],
     });
     
     // Implementer: Read existing utils
@@ -408,6 +499,7 @@ export class DemoGenerator {
       eventKind: 'subagentStop',
       agentId: implAgentId,
       status: 'completed',
+      agentTranscriptPath: agentTranscriptPaths[implAgentId],
     });
     
     add(27, {
@@ -441,6 +533,7 @@ export class DemoGenerator {
       agentType: 'shell',
       model: 'claude-sonnet-4',
       toolInput: { displayName: 'Shell' },
+      agentTranscriptPath: agentTranscriptPaths[shellAgentId],
     });
     
     // Shell: Type check
@@ -503,6 +596,7 @@ export class DemoGenerator {
       eventKind: 'subagentStop',
       agentId: shellAgentId,
       status: 'completed',
+      agentTranscriptPath: agentTranscriptPaths[shellAgentId],
     });
     
     add(44, {
@@ -570,6 +664,7 @@ export class DemoGenerator {
       model: 'claude-sonnet-4',
       projectRoot: '/demo/api-service',
       toolInput: { displayName: 'Reviewer' },
+      agentTranscriptPath: agentTranscriptPaths[reviewerId],
     });
     
     // Reviewer: Thinking
@@ -678,5 +773,36 @@ export class DemoGenerator {
     });
     
     return events;
+  }
+
+  private fabricateDemoTranscripts(runId: string): {
+    runTranscriptPath: string;
+    transcriptsDir: string;
+  } {
+    const transcriptsDir = path.join(this.projectRoot, '.codemap', 'demo-transcripts', runId);
+    fs.mkdirSync(transcriptsDir, { recursive: true });
+
+    const runTranscriptPath = path.join(transcriptsDir, 'conversation.md');
+
+    fs.writeFileSync(
+      runTranscriptPath,
+      [
+        '# Demo Conversation',
+        '',
+        '**User:** Implement auth middleware',
+        '',
+        '**Assistant:** I’ll implement JWT auth middleware, add tests, and verify behavior end-to-end.',
+        '',
+        '---',
+        '',
+        '_This is a fabricated transcript for demo purposes._',
+      ].join('\n'),
+      'utf-8'
+    );
+
+    return {
+      runTranscriptPath,
+      transcriptsDir,
+    };
   }
 }
