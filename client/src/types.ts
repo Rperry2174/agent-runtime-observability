@@ -66,6 +66,8 @@ export interface RunSummary {
   spanCount: number;
   errorCount: number;
   durationMs?: number;
+  initialPrompt?: string;
+  initialPromptAt?: number;
 }
 
 export interface RunDetails extends RunSummary {
@@ -86,7 +88,7 @@ export interface SpanListResponse {
 // ============================================================================
 
 export interface TraceUpdate {
-  type: 'spanStart' | 'spanEnd' | 'spanUpdate' | 'agentStart' | 'agentEnd' | 'runStart' | 'runEnd';
+  type: 'spanStart' | 'spanEnd' | 'spanUpdate' | 'agentStart' | 'agentEnd' | 'runStart' | 'runEnd' | 'runUpdate';
   runId: string;
   span?: Span;
   agent?: Agent;
@@ -117,7 +119,7 @@ export function getToolCategory(toolName: string): ToolCategory {
   if (name === 'contextcompact') {
     return 'system';
   }
-  if (name === 'read' || name === 'ls' || name === 'glob') {
+  if (name === 'read' || name === 'ls' || name === 'glob' || name === 'list') {
     return 'read';
   }
   if (name === 'write') {

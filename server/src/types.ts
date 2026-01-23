@@ -30,6 +30,8 @@ export interface Run {
   source: AgentSource;
   projectRoot?: string;
   transcriptPath?: string;  // Path to the conversation transcript file
+  initialPrompt?: string;
+  initialPromptAt?: number;
   agents: Map<string, Agent>;
 }
 
@@ -99,7 +101,8 @@ export type TelemetryEventKind =
   | 'thinkingStart'
   | 'thinkingEnd'
   | 'contextCompact'
-  | 'agentResponse';
+  | 'agentResponse'
+  | 'beforeSubmitPrompt';
 
 /**
  * Raw telemetry event from hooks.
@@ -118,6 +121,7 @@ export interface TelemetryEvent {
   toolName?: string;
   toolInput?: unknown;  // Raw tool input (will be sanitized)
   toolOutput?: unknown;  // Raw tool output (will be sanitized)
+  prompt?: string;
   
   // Metadata
   hookEventName?: string;
@@ -179,6 +183,8 @@ export interface RunSummary {
   spanCount: number;
   errorCount: number;
   durationMs?: number;
+  initialPrompt?: string;
+  initialPromptAt?: number;
 }
 
 /** Full run details for /api/runs/:runId */
@@ -209,7 +215,7 @@ export interface WsMessage {
 
 /** Trace update broadcast to clients */
 export interface TraceUpdate {
-  type: 'spanStart' | 'spanEnd' | 'spanUpdate' | 'agentStart' | 'agentEnd' | 'runStart' | 'runEnd';
+  type: 'spanStart' | 'spanEnd' | 'spanUpdate' | 'agentStart' | 'agentEnd' | 'runStart' | 'runEnd' | 'runUpdate';
   runId: string;
   span?: Span;
   agent?: Agent;

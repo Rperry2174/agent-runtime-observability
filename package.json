@@ -3,25 +3,18 @@
   "version": "2.0.0",
   "description": "Real-time observability dashboard for AI coding agents (Cursor, Claude Code)",
   "type": "module",
-  "bin": {
-    "codemap": "./bin/setup.js"
-  },
+  "private": true,
   "workspaces": ["server", "client"],
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm run dev --workspace=server",
     "dev:client": "npm run dev --workspace=client",
     "build": "npm run build --workspace=server && npm run build --workspace=client",
-    "setup": "node bin/setup.js setup",
-    "start": "node bin/setup.js start"
+    "test": "npm test --workspaces"
   },
-  "keywords": ["claude", "claude-code", "visualization", "agents", "pixel-art"],
+  "keywords": ["observability", "tracing", "cursor", "claude-code", "agents"],
   "author": "",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/JamsusMaximus/codemap"
-  },
   "devDependencies": {
     "concurrently": "^8.2.0"
   }

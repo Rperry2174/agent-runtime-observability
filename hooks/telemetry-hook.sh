@@ -11,6 +11,10 @@
 EVENT_KIND="$1"
 SERVER_URL="http://localhost:5174/api/telemetry"
 LOG_FILE="/tmp/observability-hook.log"
+DEBUG_LOG="/tmp/observability-hook-debug.log"
+
+# Enable debug mode with HOOK_DEBUG=1
+DEBUG_MODE="${HOOK_DEBUG:-0}"
 
 # Read JSON from stdin
 INPUT=$(cat)
@@ -19,6 +23,13 @@ INPUT=$(cat)
 if [ -z "$INPUT" ] || [ "$INPUT" = "{}" ]; then
     echo "$(date): [$EVENT_KIND] SKIP - empty input" >> "$LOG_FILE"
     exit 0
+fi
+
+# Debug: log raw input
+if [ "$DEBUG_MODE" = "1" ]; then
+    echo "$(date): [$EVENT_KIND] RAW:" >> "$DEBUG_LOG"
+    echo "$INPUT" | /usr/bin/jq -c '.' >> "$DEBUG_LOG" 2>/dev/null || echo "$INPUT" >> "$DEBUG_LOG"
+    echo "" >> "$DEBUG_LOG"
 fi
 
 # Extract run ID (Cursor: conversation_id, Claude: session_id)
@@ -48,6 +59,24 @@ if [ -n "$SPAN_ID" ]; then
     PAYLOAD="$PAYLOAD,\"spanId\":\"$SPAN_ID\""
 fi
 
+# Extract agent ID (various possible field names)
+AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.agent_id // .agentId // .subagent_id // .task_agent_id // empty' 2>/dev/null)
+if [ -n "$AGENT_ID" ]; then
+    PAYLOAD="$PAYLOAD,\"agentId\":\"$AGENT_ID\""
+fi
+
+# Extract parent agent ID
+PARENT_AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.parent_agent_id // .parentAgentId // empty' 2>/dev/null)
+if [ -n "$PARENT_AGENT_ID" ]; then
+    PAYLOAD="$PAYLOAD,\"parentAgentId\":\"$PARENT_AGENT_ID\""
+fi
+
+# Extract parent span ID (for Task tool nesting)
+PARENT_SPAN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.parent_span_id // .parentSpanId // .task_span_id // empty' 2>/dev/null)
+if [ -n "$PARENT_SPAN_ID" ]; then
+    PAYLOAD="$PAYLOAD,\"parentSpanId\":\"$PARENT_SPAN_ID\""
+fi
+
 # Extract tool name
 TOOL_NAME=$(echo "$INPUT" | /usr/bin/jq -r '.tool_name // empty' 2>/dev/null)
 if [ -n "$TOOL_NAME" ]; then
@@ -67,6 +96,13 @@ TOOL_OUTPUT=$(echo "$INPUT" | /usr/bin/jq -r '.tool_output // empty' 2>/dev/null
 if [ -n "$TOOL_OUTPUT" ]; then
     ESCAPED_OUTPUT=$(echo "$TOOL_OUTPUT" | head -c 300 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
     PAYLOAD="$PAYLOAD,\"toolOutput\":\"$ESCAPED_OUTPUT\""
+fi
+
+# Extract prompt text (for beforeSubmitPrompt)
+PROMPT_TEXT=$(echo "$INPUT" | /usr/bin/jq -r '.prompt // empty' 2>/dev/null)
+if [ -n "$PROMPT_TEXT" ]; then
+    ESCAPED_PROMPT=$(echo "$PROMPT_TEXT" | head -c 1000 | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | tr -d '\n\r')
+    PAYLOAD="$PAYLOAD,\"prompt\":\"$ESCAPED_PROMPT\""
 fi
 
 # Extract hook event name
@@ -181,7 +217,21 @@ PAYLOAD="$PAYLOAD}"
 
 # Log for debugging (truncated)
 TOOL_LOG="${TOOL_NAME:-session}"
-echo "$(date): [$EVENT_KIND] $TOOL_LOG run=${RUN_ID:0:8}" >> "$LOG_FILE"
+LOG_MSG="$(date): [$EVENT_KIND] $TOOL_LOG run=${RUN_ID:0:8}"
+if [ -n "$AGENT_ID" ]; then
+    LOG_MSG="$LOG_MSG agent=${AGENT_ID:0:8}"
+fi
+if [ -n "$SPAN_ID" ]; then
+    LOG_MSG="$LOG_MSG span=${SPAN_ID:0:8}"
+fi
+echo "$LOG_MSG" >> "$LOG_FILE"
+
+# Debug: log the payload we're sending
+if [ "$DEBUG_MODE" = "1" ]; then
+    echo "$(date): PAYLOAD:" >> "$DEBUG_LOG"
+    echo "$PAYLOAD" | /usr/bin/jq '.' >> "$DEBUG_LOG" 2>/dev/null || echo "$PAYLOAD" >> "$DEBUG_LOG"
+    echo "" >> "$DEBUG_LOG"
+fi
 
 # Send event to server (non-blocking with timeout)
 /usr/bin/curl -s -X POST "$SERVER_URL" \

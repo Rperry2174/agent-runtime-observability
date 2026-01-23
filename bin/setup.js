@@ -3,7 +3,7 @@
  * Agent Observability Setup Script
  *
  * Configures Cursor and Claude Code hooks for telemetry collection.
- * Run this in your project root: npx codemap setup
+ * Run from a project directory: node /path/to/codemap/bin/setup.js setup
  */
 
 import fs from 'fs';
@@ -52,7 +52,7 @@ const cursorHooksConfig = {
     
     // Attachments visibility (rules, files)
     beforeReadFile: [{ command: `${TELEMETRY_HOOK} toolStart` }],
-    beforeSubmitPrompt: [{ command: `${TELEMETRY_HOOK} toolStart` }],
+    beforeSubmitPrompt: [{ command: `${TELEMETRY_HOOK} beforeSubmitPrompt` }],
   }
 };
 

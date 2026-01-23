@@ -51,6 +51,11 @@ const demoGenerator = new DemoGenerator(traceStore, PROJECT_ROOT);
 // Telemetry Ingest API
 // ============================================================================
 
+// Debug mode - on by default, disable via /api/debug/disable
+let debugTelemetry = process.env.DEBUG_TELEMETRY !== '0';
+const recentRawEvents: Array<{ ts: number; raw: unknown; normalized: TelemetryEvent }> = [];
+const MAX_DEBUG_EVENTS = 100;
+
 /**
  * POST /api/telemetry
  * 
@@ -59,14 +64,39 @@ const demoGenerator = new DemoGenerator(traceStore, PROJECT_ROOT);
  */
 app.post('/api/telemetry', (req, res) => {
   try {
-    const event = normalizeEvent(req.body);
+    const raw = req.body;
+    const event = normalizeEvent(raw);
     
     if (!event.eventKind) {
       console.log('[Telemetry] Missing eventKind, inferring from payload');
       event.eventKind = inferEventKind(event);
     }
     
-    console.log(`[Telemetry] ${event.eventKind}: ${event.toolName || event.agentType || 'session'} (${event.runId?.slice(0, 8) || 'unknown'})`);
+    // Store for debugging
+    if (debugTelemetry || recentRawEvents.length < 20) {
+      recentRawEvents.push({ ts: Date.now(), raw, normalized: event });
+      if (recentRawEvents.length > MAX_DEBUG_EVENTS) {
+        recentRawEvents.shift();
+      }
+    }
+    
+    // Enhanced logging
+    const logParts = [
+      `[Telemetry] ${event.eventKind}:`,
+      event.toolName || event.hookEventName || event.agentType || 'session',
+      `run=${event.runId?.slice(0, 8) || '?'}`,
+    ];
+    if (event.agentId && event.agentId !== event.runId) {
+      logParts.push(`agent=${event.agentId.slice(0, 8)}`);
+    }
+    if (event.spanId) {
+      logParts.push(`span=${event.spanId.slice(0, 8)}`);
+    }
+    console.log(logParts.join(' '));
+    
+    if (debugTelemetry) {
+      console.log('[Telemetry] Raw keys:', Object.keys(raw).join(', '));
+    }
     
     traceStore.processEvent(event);
     
@@ -90,16 +120,31 @@ function normalizeEvent(body: Record<string, unknown>): TelemetryEvent {
   // Run ID: Cursor uses conversation_id, Claude uses session_id
   event.runId = (body.runId || body.conversation_id || body.session_id) as string;
   
-  // Agent ID for subagents
-  event.agentId = body.agentId as string;
+  // Agent ID for subagents - check multiple possible field names
+  event.agentId = (body.agentId || body.agent_id || body.subagent_id || body.task_agent_id) as string;
+  
+  // Parent agent ID
+  event.parentAgentId = (body.parentAgentId || body.parent_agent_id) as string;
   
   // Span ID: Cursor provides tool_use_id
   event.spanId = (body.spanId || body.tool_use_id) as string;
   
-  // Tool info
-  event.toolName = body.toolName || body.tool_name as string;
+  // Parent span ID for nesting
+  event.parentSpanId = (body.parentSpanId || body.parent_span_id || body.task_span_id) as string;
+  
+  // Tool info - try multiple field names
+  let toolName = (body.toolName || body.tool_name) as string;
+  
+  // If no tool name, infer from hook event name
+  const hookEventName = (body.hookEventName || body.hook_event_name) as string;
+  if (!toolName && hookEventName) {
+    toolName = inferToolNameFromHook(hookEventName, body);
+  }
+  
+  event.toolName = toolName;
   event.toolInput = body.toolInput || body.tool_input;
   event.toolOutput = body.toolOutput || body.tool_output;
+  event.prompt = (body.prompt || body.prompt_text) as string;
   
   // Metadata
   event.hookEventName = body.hookEventName || body.hook_event_name as string;
@@ -144,6 +189,56 @@ function normalizeEvent(body: Record<string, unknown>): TelemetryEvent {
 }
 
 /**
+ * Infer tool name from hook event name when tool_name is not provided
+ * Returns undefined for events that shouldn't create spans
+ */
+function inferToolNameFromHook(hookEventName: string, body: Record<string, unknown>): string | undefined {
+  const hook = hookEventName.toLowerCase();
+  
+  // beforeReadFile/afterReadFile → context/file loading events
+  // These are not real tool calls - they're context injection
+  // Skip them to avoid cluttering the timeline with "Unknown" spans
+  if (hook.includes('beforereadfile') || hook.includes('afterreadfile')) {
+    return undefined; // Skip - not a user-visible tool call
+  }
+  
+  // beforeSubmitPrompt → user submitting a message (not a tool call - skip)
+  if (hook.includes('submitprompt')) {
+    return undefined;
+  }
+  
+  // afterAgentThought → thinking (handled separately via thinkingEnd event)
+  if (hook.includes('thought')) {
+    return undefined; // Handled by thinkingEnd
+  }
+  
+  // afterAgentResponse → agent response (not a tool call - skip)
+  if (hook.includes('response')) {
+    return undefined;
+  }
+  
+  // preCompact → context compaction (handled separately via contextCompact event)
+  if (hook.includes('compact')) {
+    return undefined; // Handled by contextCompact
+  }
+  
+  // Shell/MCP hooks with execution in name (rare - usually have tool_name)
+  if (hook.includes('shellexecution')) {
+    return 'Shell';
+  }
+  if (hook.includes('mcpexecution')) {
+    return 'MCP';
+  }
+  
+  // preToolUse/postToolUse should have tool_name, so this is a fallback
+  if (hook.includes('tooluse')) {
+    return undefined; // Should have tool_name
+  }
+  
+  return undefined;
+}
+
+/**
  * Infer event kind from payload if not explicitly provided
  */
 function inferEventKind(event: TelemetryEvent): TelemetryEventKind {
@@ -154,6 +249,7 @@ function inferEventKind(event: TelemetryEvent): TelemetryEventKind {
   if (hookName.includes('stop')) return 'stop';
   if (hookName.includes('subagentstart')) return 'subagentStart';
   if (hookName.includes('subagentstop')) return 'subagentStop';
+  if (hookName.includes('submitprompt')) return 'beforeSubmitPrompt';
   if (hookName.includes('pretooluse') || hookName.includes('before')) return 'toolStart';
   if (hookName.includes('posttooluse') || hookName.includes('after')) return 'toolEnd';
   if (hookName.includes('failure')) return 'toolFailure';
@@ -371,7 +467,53 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     wsClients: wsManager.getClientCount(),
     projectRoot: PROJECT_ROOT,
+    debugTelemetry,
   });
+});
+
+/**
+ * POST /api/debug/enable
+ * Enable verbose telemetry debugging
+ */
+app.post('/api/debug/enable', (_req, res) => {
+  debugTelemetry = true;
+  console.log('[Debug] Telemetry debugging ENABLED');
+  res.json({ debugTelemetry: true });
+});
+
+/**
+ * POST /api/debug/disable  
+ * Disable verbose telemetry debugging
+ */
+app.post('/api/debug/disable', (_req, res) => {
+  debugTelemetry = false;
+  console.log('[Debug] Telemetry debugging DISABLED');
+  res.json({ debugTelemetry: false });
+});
+
+/**
+ * GET /api/debug/events
+ * Get recent raw telemetry events for debugging
+ */
+app.get('/api/debug/events', (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 50;
+  const events = recentRawEvents.slice(-limit);
+  res.json({
+    count: events.length,
+    total: recentRawEvents.length,
+    debugEnabled: debugTelemetry,
+    events,
+  });
+});
+
+/**
+ * GET /api/debug/events/raw
+ * Get just the raw hook payloads (before normalization)
+ */
+app.get('/api/debug/events/raw', (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 20;
+  const events = recentRawEvents.slice(-limit).map(e => e.raw);
+  res.json(events);
 });
 
 // ============================================================================

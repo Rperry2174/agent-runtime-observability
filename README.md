@@ -16,17 +16,54 @@ npm install
 npm run dev
 ```
 
-Then open http://localhost:5173/observability
+- **Server**: http://localhost:5174
+- **Dashboard**: http://localhost:5173/observability
 
-## Setup Hooks
+## Setup Hooks in Your Project
 
-In your project directory, run:
+To observe an agent session in another project, add hooks that point to this repo's telemetry script.
 
-```bash
-npx github:JamsusMaximus/codemap setup
+### Cursor
+
+Create/edit `<your-project>/.cursor/hooks.json`:
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh sessionStart" }],
+    "sessionEnd": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh sessionEnd" }],
+    "preToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolStart" }],
+    "postToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolEnd" }],
+    "postToolUseFailure": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolFailure" }],
+    "subagentStart": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStart" }],
+    "subagentStop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStop" }],
+    "afterAgentThought": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh thinkingEnd" }],
+    "beforeSubmitPrompt": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh beforeSubmitPrompt" }],
+    "stop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh stop" }]
+  }
+}
 ```
 
-This configures hooks for both Cursor (`.cursor/hooks.json`) and Claude Code (`.claude/settings.local.json`).
+Replace `/path/to/codemap` with the actual path to this repo (e.g. `/Users/you/Desktop/projects/codemap`).
+
+### Claude Code
+
+Create/edit `<your-project>/.claude/settings.local.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh toolStart" }] }],
+    "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh toolEnd" }] }],
+    "Stop": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh stop" }] }]
+  }
+}
+```
+
+### Gitignore
+
+Add `.codemap/` to your project's `.gitignore` — that's where trace files are stored.
 
 ## Features
 

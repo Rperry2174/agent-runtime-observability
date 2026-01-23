@@ -36,6 +36,18 @@ export class TraceStore {
   private activeSpans: Map<string, Map<string, Span>> = new Map(); // runId -> (spanId -> span)
   private pendingSpans: Map<string, Span> = new Map(); // spanId -> span (waiting for end event)
   
+  // Track active subagents per run for tool call attribution
+  // Key: runId, Value: Active subagent state (stack + set for dedupe)
+  private activeSubagents: Map<string, { stack: string[]; active: Set<string> }> = new Map();
+  
+  // Track Task spans that spawned subagents
+  // Key: runId + agentId, Value: spanId of the Task tool call
+  private taskSpanMap: Map<string, string> = new Map();
+  
+  // Map Task spanId -> agentId for attribution
+  // Key: runId + spanId, Value: agentId of spawned subagent
+  private taskSpanToAgent: Map<string, string> = new Map();
+  
   private tracesDir: string;
   private onUpdate: ((update: TraceUpdate) => void) | null = null;
 
@@ -181,6 +193,9 @@ export class TraceStore {
       case 'agentResponse':
         this.handleAgentResponse(event, now);
         break;
+      case 'beforeSubmitPrompt':
+        this.handleBeforeSubmitPrompt(event, now);
+        break;
     }
   }
 
@@ -315,13 +330,21 @@ export class TraceStore {
     const runId = event.runId;
     if (!runId) return;
     
+    // Skip non-tool events that don't have a tool name
+    if (!event.toolName) {
+      console.log(`[TraceStore] Skipping toolStart without toolName: ${event.hookEventName}`);
+      return;
+    }
+    
     // Ensure run exists
     if (!this.runs.has(runId)) {
       this.handleSessionStart({ ...event, eventKind: 'sessionStart' }, now);
     }
     
     const run = this.runs.get(runId)!;
-    const agentId = event.agentId || runId;
+    
+    // Determine which agent this tool call belongs to
+    const agentId = this.resolveAgentIdForTool(event, runId);
     
     // Ensure agent exists
     if (!run.agents.has(agentId)) {
@@ -339,6 +362,26 @@ export class TraceStore {
     }
     
     const spanId = event.spanId || uuidv4();
+    if (event.spanId) {
+      const activeMap = this.activeSpans.get(runId);
+      const existing = this.pendingSpans.get(spanId) || activeMap?.get(spanId);
+      if (existing) {
+        if (event.toolInput) {
+          existing.inputPreview = this.sanitizePreview(event.toolInput);
+          existing.files = this.extractFilePaths(event.toolInput);
+        }
+        if (event.attachments) {
+          existing.attachmentsUsed = event.attachments;
+        }
+        if (event.toolName) {
+          existing.toolName = event.toolName;
+        }
+        this.appendToFile(runId, 'span', existing);
+        this.broadcast({ type: 'spanUpdate', runId, span: existing });
+        console.log(`[TraceStore] Span updated: ${existing.toolName} (${spanId.slice(0, 8)})`);
+        return;
+      }
+    }
     
     const span: Span = {
       spanId,
@@ -383,11 +426,16 @@ export class TraceStore {
     // Find the span to complete
     let span: Span | undefined;
     
-    if (spanId && this.pendingSpans.has(spanId)) {
-      span = this.pendingSpans.get(spanId);
-      this.pendingSpans.delete(spanId);
+    if (spanId) {
+      if (this.pendingSpans.has(spanId)) {
+        span = this.pendingSpans.get(spanId);
+        this.pendingSpans.delete(spanId);
+      } else {
+        console.log(`[TraceStore] No pending span found for toolEnd: ${spanId}`);
+        return;
+      }
     } else if (runId) {
-      // Fallback: find most recent running span for this tool
+      // Fallback only if no spanId is provided
       const activeMap = this.activeSpans.get(runId);
       if (activeMap) {
         for (const [id, s] of activeMap) {
@@ -434,9 +482,14 @@ export class TraceStore {
     
     let span: Span | undefined;
     
-    if (spanId && this.pendingSpans.has(spanId)) {
-      span = this.pendingSpans.get(spanId);
-      this.pendingSpans.delete(spanId);
+    if (spanId) {
+      if (this.pendingSpans.has(spanId)) {
+        span = this.pendingSpans.get(spanId);
+        this.pendingSpans.delete(spanId);
+      } else {
+        console.log(`[TraceStore] No pending span found for toolFailure: ${spanId}`);
+        return;
+      }
     } else if (runId) {
       const activeMap = this.activeSpans.get(runId);
       if (activeMap) {
@@ -477,15 +530,15 @@ export class TraceStore {
     
     const run = this.runs.get(runId);
     if (!run) return;
-    
-    const agentId = event.agentId || uuidv4();
+    const agentId = this.resolveSubagentIdForStart(event, runId);
     
     // Check for custom displayName in toolInput (for demo)
     const customName = event.toolInput && typeof event.toolInput === 'object' 
       ? (event.toolInput as Record<string, unknown>).displayName as string | undefined
       : undefined;
-    
-    const agent: Agent = {
+
+    const existing = run.agents.get(agentId);
+    const agent: Agent = existing || {
       agentId,
       runId,
       displayName: customName || this.getAgentDisplayName(event.source, run.agents.size + 1, event.agentType),
@@ -495,18 +548,42 @@ export class TraceStore {
       transcriptPath: event.agentTranscriptPath,
       startedAt: event.timestamp || now,
     };
+
+    if (!existing) {
+      run.agents.set(agentId, agent);
+    } else {
+      // Preserve initial displayName but fill missing metadata
+      if (!existing.agentType) existing.agentType = event.agentType;
+      if (!existing.model) existing.model = event.model;
+      if (!existing.parentAgentId) existing.parentAgentId = event.parentAgentId || runId;
+      if (event.agentTranscriptPath) existing.transcriptPath = event.agentTranscriptPath;
+    }
+
+    // Track this as an active subagent (deduped)
+    this.markSubagentActive(runId, agentId);
     
-    run.agents.set(agentId, agent);
+    // Find the most recent running Task span to link as parent
+    const runSpans = this.spans.get(runId) || [];
+    const taskSpan = [...runSpans]
+      .reverse()
+      .find(s => s.toolName === 'Task' && s.status === 'running');
+    const parentSpanId = event.parentSpanId || taskSpan?.spanId;
+    if (parentSpanId) {
+      this.taskSpanMap.set(`${runId}:${agentId}`, parentSpanId);
+      this.taskSpanToAgent.set(`${runId}:${parentSpanId}`, agentId);
+      console.log(`[TraceStore] Linked subagent ${agentId.slice(0, 8)} to Task span ${parentSpanId.slice(0, 8)}`);
+    }
     
-    this.appendToFile(runId, 'agent', agent);
-    this.broadcast({ type: 'agentStart', runId, agent });
-    
-    console.log(`[TraceStore] Subagent started: ${agent.displayName}`);
+    if (!existing) {
+      this.appendToFile(runId, 'agent', agent);
+      this.broadcast({ type: 'agentStart', runId, agent });
+      console.log(`[TraceStore] Subagent started: ${agent.displayName} (${agentId.slice(0, 8)})`);
+    }
   }
 
   private handleSubagentStop(event: TelemetryEvent, now: number): void {
     const runId = event.runId;
-    const agentId = event.agentId;
+    const agentId = this.resolveSubagentIdForStop(event, runId);
     if (!runId || !agentId) return;
     
     const run = this.runs.get(runId);
@@ -522,10 +599,23 @@ export class TraceStore {
       agent.transcriptPath = event.agentTranscriptPath;
     }
     
+    // Remove from active subagents
+    const remaining = this.clearSubagentActive(runId, agentId);
+    if (remaining !== null) {
+      console.log(`[TraceStore] Removed ${agentId.slice(0, 8)} from active subagents. Remaining: ${remaining}`);
+    }
+    
+    // Clean up task span mapping
+    const taskSpanId = this.taskSpanMap.get(`${runId}:${agentId}`);
+    if (taskSpanId) {
+      this.taskSpanToAgent.delete(`${runId}:${taskSpanId}`);
+    }
+    this.taskSpanMap.delete(`${runId}:${agentId}`);
+    
     this.appendToFile(runId, 'agent', agent);
     this.broadcast({ type: 'agentEnd', runId, agent });
     
-    console.log(`[TraceStore] Subagent ended: ${agent.displayName}`);
+    console.log(`[TraceStore] Subagent ended: ${agent.displayName} (${agentId.slice(0, 8)})`);
   }
 
   private handleThinkingStart(event: TelemetryEvent, now: number): void {
@@ -608,6 +698,30 @@ export class TraceStore {
     console.log(`[TraceStore] Agent response received`);
   }
 
+  private handleBeforeSubmitPrompt(event: TelemetryEvent, now: number): void {
+    const runId = event.runId;
+    if (!runId) return;
+
+    if (!this.runs.has(runId)) {
+      this.handleSessionStart({ ...event, eventKind: 'sessionStart' }, now);
+    }
+
+    const run = this.runs.get(runId);
+    if (!run || run.initialPrompt || !event.prompt) return;
+
+    run.initialPrompt = this.sanitizePreview(event.prompt, 1000);
+    run.initialPromptAt = event.timestamp || now;
+
+    this.appendToFile(runId, 'run', this.serializeRun(run));
+    this.broadcast({
+      type: 'runUpdate',
+      runId,
+      run: this.getRunSummary(runId)!,
+    });
+
+    console.log(`[TraceStore] Captured initial prompt for ${runId.slice(0, 8)}`);
+  }
+
   // ============================================================================
   // Query Methods
   // ============================================================================
@@ -648,6 +762,8 @@ export class TraceStore {
       spanCount: runSpans.length,
       errorCount,
       durationMs: run.endedAt ? run.endedAt - run.startedAt : undefined,
+      initialPrompt: run.initialPrompt,
+      initialPromptAt: run.initialPromptAt,
     };
   }
 
@@ -693,6 +809,81 @@ export class TraceStore {
   // ============================================================================
   // Helpers
   // ============================================================================
+
+  private getActiveSubagentState(runId: string): { stack: string[]; active: Set<string> } {
+    let state = this.activeSubagents.get(runId);
+    if (!state) {
+      state = { stack: [], active: new Set() };
+      this.activeSubagents.set(runId, state);
+    }
+    return state;
+  }
+
+  private markSubagentActive(runId: string, agentId: string): void {
+    const state = this.getActiveSubagentState(runId);
+    if (state.active.has(agentId)) {
+      // Move to end to keep attribution to most recent start
+      state.stack = state.stack.filter(id => id !== agentId);
+    } else {
+      state.active.add(agentId);
+    }
+    state.stack.push(agentId);
+    console.log(`[TraceStore] Active subagents for ${runId.slice(0, 8)}: ${state.stack.length}`);
+  }
+
+  private clearSubagentActive(runId: string, agentId: string): number | null {
+    const state = this.activeSubagents.get(runId);
+    if (!state) return null;
+    if (state.active.has(agentId)) {
+      state.active.delete(agentId);
+    }
+    state.stack = state.stack.filter(id => id !== agentId);
+    return state.stack.length;
+  }
+
+  private resolveSubagentIdForStart(event: TelemetryEvent, runId: string): string {
+    if (event.agentId) return event.agentId;
+    if (event.parentSpanId) {
+      const mapped = this.taskSpanToAgent.get(`${runId}:${event.parentSpanId}`);
+      return mapped || event.parentSpanId;
+    }
+    // Fall back to most recent Task span (if available)
+    const runSpans = this.spans.get(runId) || [];
+    const taskSpan = [...runSpans].reverse().find(s => s.toolName === 'Task' && s.status === 'running');
+    if (taskSpan) {
+      return taskSpan.spanId;
+    }
+    return uuidv4();
+  }
+
+  private resolveSubagentIdForStop(event: TelemetryEvent, runId?: string): string | undefined {
+    if (!runId) return event.agentId;
+    if (event.agentId) return event.agentId;
+    if (event.parentSpanId) {
+      return this.taskSpanToAgent.get(`${runId}:${event.parentSpanId}`) || event.parentSpanId;
+    }
+    return undefined;
+  }
+
+  private resolveAgentIdForTool(event: TelemetryEvent, runId: string): string {
+    if (event.agentId && event.agentId !== runId) {
+      return event.agentId;
+    }
+
+    if (event.parentSpanId) {
+      const mapped = this.taskSpanToAgent.get(`${runId}:${event.parentSpanId}`);
+      if (mapped) return mapped;
+    }
+
+    const state = this.activeSubagents.get(runId);
+    if (state && state.stack.length > 0) {
+      const agentId = state.stack[state.stack.length - 1];
+      console.log(`[TraceStore] Attributing tool ${event.toolName} to active subagent: ${agentId.slice(0, 8)}`);
+      return agentId;
+    }
+
+    return runId;
+  }
 
   private getAgentDisplayName(source: AgentSource | undefined, num: number, agentType?: string): string {
     const sourceName = source === 'cursor' ? 'Cursor' :

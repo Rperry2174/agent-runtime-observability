@@ -234,15 +234,13 @@ curl http://localhost:5174/api/health | jq
 
 ## Setup for Other Projects
 
-```bash
-# From any project directory
-npx github:JamsusMaximus/codemap setup
+To observe agent sessions in another project, manually create hook configs pointing to this repo's telemetry script.
 
-# This will:
-# 1. Configure .cursor/hooks.json for Cursor
-# 2. Configure .claude/settings.local.json for Claude Code
-# 3. Add .codemap/ to .gitignore
-```
+**Cursor**: Create `<project>/.cursor/hooks.json` with hooks calling `/path/to/codemap/hooks/telemetry-hook.sh <eventKind>`.
+
+**Claude Code**: Create `<project>/.claude/settings.local.json` with hooks calling the same script.
+
+See `README.md` for full example configs.
 
 ## Key Design Decisions
 

@@ -18,6 +18,8 @@ import {
   ToolCategory,
 } from '../types';
 
+type DisplaySpan = Span & { compactCount?: number; compactFiles?: string[] };
+
 // ============================================================================
 // Tool Legend Configuration
 // ============================================================================
@@ -59,6 +61,7 @@ export function ObservabilityDashboard() {
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [, forceUpdate] = useState(0);
   const [demoLoading, setDemoLoading] = useState(false);
+  const [compactMode, setCompactMode] = useState(true);
 
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [transcriptTitle, setTranscriptTitle] = useState<string>('');
@@ -291,6 +294,13 @@ export function ObservabilityDashboard() {
                 )}
               </div>
 
+              {run?.initialPrompt && (
+                <div style={styles.initialPrompt}>
+                  <div style={styles.initialPromptLabel}>Initial query</div>
+                  <div style={styles.initialPromptText}>{run.initialPrompt}</div>
+                </div>
+              )}
+
               <div style={styles.statsGrid}>
                 <div style={styles.statBox}>
                   <div style={styles.statValue}>{formatDuration(runSummary.durationMs)}</div>
@@ -323,16 +333,27 @@ export function ObservabilityDashboard() {
               <section style={styles.activityCard}>
                 <div style={styles.activityHeader}>
                   <h2 style={styles.activityTitle}>Agent Activity</h2>
-                  <div style={styles.legend}>
-                    {TOOL_LEGEND.map(tool => (
-                      <div key={tool.name} style={styles.legendItem}>
-                        <div style={{
-                          ...styles.legendDot,
-                          backgroundColor: TOOL_COLORS[tool.category],
-                        }} />
-                        <span>{tool.name}</span>
-                      </div>
-                    ))}
+                  <div style={styles.activityControls}>
+                    <button
+                      style={{
+                        ...styles.compactToggle,
+                        ...(compactMode ? styles.compactToggleActive : {}),
+                      }}
+                      onClick={() => setCompactMode(prev => !prev)}
+                    >
+                      Compact {compactMode ? 'On' : 'Off'}
+                    </button>
+                    <div style={styles.legend}>
+                      {TOOL_LEGEND.map(tool => (
+                        <div key={tool.name} style={styles.legendItem}>
+                          <div style={{
+                            ...styles.legendDot,
+                            backgroundColor: TOOL_COLORS[tool.category],
+                          }} />
+                          <span>{tool.name}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
@@ -359,6 +380,9 @@ export function ObservabilityDashboard() {
                       if (s.toolName === 'Task') return false;
                       return true;
                     });
+                    const displaySpans: DisplaySpan[] = compactMode
+                      ? buildCompactSpans(agentSpans, now, run?.projectRoot)
+                      : agentSpans;
                     const isSubagent = !!agent.parentAgentId;
                     const parentAgent = getParentAgent(agent);
                     
@@ -383,7 +407,7 @@ export function ObservabilityDashboard() {
                         </div>
                         
                         {(() => {
-                          const { spanLayouts, laneCount } = buildSpanLanes(agentSpans, now);
+                          const { spanLayouts, laneCount } = buildSpanLanes(displaySpans, now);
                           const trackHeight = Math.max(
                             SPAN_TRACK_MIN_HEIGHT,
                             laneCount * (SPAN_ROW_HEIGHT + SPAN_ROW_GAP) + SPAN_ROW_GAP
@@ -401,6 +425,7 @@ export function ObservabilityDashboard() {
                               const isSelected = selectedSpan?.spanId === span.spanId;
                               const bgColor = isError ? STATUS_COLORS[span.status] : TOOL_COLORS[category];
                               const top = SPAN_ROW_GAP + lane * (SPAN_ROW_HEIGHT + SPAN_ROW_GAP);
+                              const label = span.compactCount ? `${span.toolName} ×${span.compactCount}` : span.toolName;
 
                               return (
                                 <div
@@ -420,11 +445,11 @@ export function ObservabilityDashboard() {
                                     zIndex: isSelected ? 10 : 1,
                                     boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 4px ${bgColor}` : 'none',
                                   }}
-                                  title={`${span.toolName} (${span.status})`}
+                                  title={`${label} (${span.status})`}
                                 >
                                   {width > 5 && (
                                     <span style={styles.spanLabel}>
-                                      {span.toolName.replace('mcp:', '').replace('context7/', '')}
+                                      {label.replace('mcp:', '').replace('context7/', '')}
                                     </span>
                                   )}
                                 </div>
@@ -622,13 +647,13 @@ function getToolIcon(toolName: string): string {
   return '⚡';
 }
 
-function buildSpanLanes(spans: Span[], now: number): {
-  spanLayouts: Array<{ span: Span; lane: number }>;
+function buildSpanLanes(spans: DisplaySpan[], now: number): {
+  spanLayouts: Array<{ span: DisplaySpan; lane: number }>;
   laneCount: number;
 } {
   const sorted = [...spans].sort((a, b) => a.startedAt - b.startedAt);
   const laneEnds: number[] = [];
-  const spanLayouts: Array<{ span: Span; lane: number }> = [];
+  const spanLayouts: Array<{ span: DisplaySpan; lane: number }> = [];
 
   sorted.forEach(span => {
     const end = span.endedAt || now;
@@ -646,6 +671,122 @@ function buildSpanLanes(spans: Span[], now: number): {
     spanLayouts,
     laneCount: Math.max(1, laneEnds.length),
   };
+}
+
+function buildCompactSpans(spans: Span[], now: number, projectRoot?: string): DisplaySpan[] {
+  if (spans.length === 0) return [];
+
+  const compactableTools = new Set(['read', 'list', 'ls', 'glob']);
+  const windowMs = 500;
+  const sorted = [...spans].sort((a, b) => a.startedAt - b.startedAt);
+
+  const result: DisplaySpan[] = [];
+  let currentGroup: {
+    key: string;
+    start: number;
+    end: number;
+    spans: Span[];
+    files: string[];
+  } | null = null;
+
+  const flushGroup = () => {
+    if (!currentGroup) return;
+    if (currentGroup.spans.length === 1) {
+      result.push(currentGroup.spans[0]);
+      currentGroup = null;
+      return;
+    }
+
+    const base = currentGroup.spans[0];
+    const compactCount = currentGroup.spans.length;
+    const files = Array.from(new Set(currentGroup.files)).filter(Boolean);
+    const status = mergeSpanStatus(currentGroup.spans);
+
+    const filePreview = files.length > 0
+      ? `Files (${files.length}): ${files.slice(0, 5).join(', ')}${files.length > 5 ? ` +${files.length - 5} more` : ''}`
+      : 'Files: unknown';
+
+    const compactSpan: DisplaySpan = {
+      ...base,
+      spanId: `compact-${base.spanId}`,
+      startedAt: currentGroup.start,
+      endedAt: currentGroup.end,
+      durationMs: currentGroup.end - currentGroup.start,
+      status,
+      inputPreview: `Aggregated ${base.toolName} ×${compactCount}\n${filePreview}`,
+      files,
+      compactCount,
+      compactFiles: files,
+    };
+
+    result.push(compactSpan);
+    currentGroup = null;
+  };
+
+  sorted.forEach(span => {
+    const toolKey = span.toolName.toLowerCase();
+    const isCompactable = compactableTools.has(toolKey);
+    if (!isCompactable) {
+      flushGroup();
+      result.push(span);
+      return;
+    }
+
+    const normalizedPath = normalizePath(span.files?.[0], projectRoot) || '';
+    const groupKey = `${span.toolName}:${normalizedPath}`;
+    const start = span.startedAt;
+    const end = span.endedAt || now;
+
+    if (
+      currentGroup &&
+      currentGroup.key === groupKey &&
+      start - currentGroup.end <= windowMs
+    ) {
+      currentGroup.spans.push(span);
+      currentGroup.end = Math.max(currentGroup.end, end);
+      if (normalizedPath) currentGroup.files.push(normalizedPath);
+    } else {
+      flushGroup();
+      currentGroup = {
+        key: groupKey,
+        start,
+        end,
+        spans: [span],
+        files: normalizedPath ? [normalizedPath] : [],
+      };
+    }
+  });
+
+  flushGroup();
+  return result;
+}
+
+function normalizePath(filePath?: string, projectRoot?: string): string | undefined {
+  if (!filePath) return undefined;
+  let normalized = filePath.replace(/^\.\/+/, '');
+  if (projectRoot && normalized.startsWith(projectRoot)) {
+    normalized = normalized.slice(projectRoot.length);
+  }
+  normalized = normalized.replace(/^\/+/, '');
+  return normalized || undefined;
+}
+
+function mergeSpanStatus(spans: Span[]): Span['status'] {
+  const priority: Span['status'][] = [
+    'error',
+    'timeout',
+    'permission_denied',
+    'aborted',
+    'running',
+    'ok',
+  ];
+
+  for (const status of priority) {
+    if (spans.some(span => span.status === status)) {
+      return status;
+    }
+  }
+  return 'ok';
 }
 
 // ============================================================================
@@ -862,6 +1003,27 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#64748b',
     marginBottom: '24px',
   },
+  initialPrompt: {
+    marginBottom: '20px',
+    padding: '12px 16px',
+    backgroundColor: '#0a0a0f',
+    borderRadius: '10px',
+    border: '1px solid #1e293b',
+  },
+  initialPromptLabel: {
+    fontSize: '12px',
+    fontWeight: 600,
+    color: '#94a3b8',
+    marginBottom: '6px',
+    letterSpacing: '0.4px',
+    textTransform: 'uppercase',
+  },
+  initialPromptText: {
+    fontSize: '14px',
+    color: '#e2e8f0',
+    lineHeight: 1.5,
+    whiteSpace: 'pre-wrap',
+  },
   metaDot: {
     color: '#334155',
   },
@@ -918,6 +1080,11 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between',
     marginBottom: '20px',
   },
+  activityControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+  },
   activityTitle: {
     fontSize: '16px',
     fontWeight: 600,
@@ -941,6 +1108,21 @@ const styles: Record<string, React.CSSProperties> = {
     height: '10px',
     borderRadius: '50%',
   },
+  compactToggle: {
+    padding: '6px 12px',
+    borderRadius: '999px',
+    border: '1px solid #334155',
+    backgroundColor: 'transparent',
+    color: '#94a3b8',
+    fontSize: '12px',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  compactToggleActive: {
+    backgroundColor: '#1e293b',
+    color: '#e2e8f0',
+    borderColor: '#475569',
+  },
   
   // Timeline
   timeline: {
@@ -954,7 +1136,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     justifyContent: 'space-between',
     marginBottom: '16px',
-    marginLeft: '160px',
+    marginLeft: '220px',
     fontSize: '12px',
     color: '#475569',
   },
@@ -973,7 +1155,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: '20px',
   },
   agentInfo: {
-    width: '140px',
+    width: '200px',
     flexShrink: 0,
     paddingRight: '16px',
     paddingTop: '4px',
@@ -986,12 +1168,14 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
   },
   agentName: {
-    fontSize: '14px',
+    fontSize: '15px',
     fontWeight: 500,
     color: '#f1f5f9',
+    lineHeight: 1.2,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
+    whiteSpace: 'normal',
+    maxHeight: '2.4em',
     minWidth: 0,
   },
   taskBadge: {
@@ -1003,7 +1187,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
   },
   agentModel: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#64748b',
   },
   spanTrack: {

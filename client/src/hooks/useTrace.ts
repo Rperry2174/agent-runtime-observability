@@ -48,6 +48,7 @@ export function useTrace(): UseTraceResult {
   const agentsRef = useRef<Map<string, Agent>>(new Map());
   const spansRef = useRef<Span[]>([]);
   const dataVersionRef = useRef(0);
+  const spanIndexRef = useRef<Map<string, number>>(new Map());
   
   // State for UI components that need re-renders
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
@@ -92,6 +93,7 @@ export function useTrace(): UseTraceResult {
       currentRunRef.current = details;
       agentsRef.current = new Map(details.agents.map(a => [a.agentId, a]));
       spansRef.current = spansData.spans;
+      spanIndexRef.current = new Map(spansData.spans.map((span, idx) => [span.spanId, idx]));
       dataVersionRef.current++;
       
       // Subscribe to this run's updates
@@ -128,7 +130,15 @@ export function useTrace(): UseTraceResult {
     switch (update.type) {
       case 'spanStart':
         if (update.span) {
-          spansRef.current = [...spansRef.current, update.span];
+          const existingIndex = spanIndexRef.current.get(update.span.spanId);
+          if (existingIndex !== undefined) {
+            const next = [...spansRef.current];
+            next[existingIndex] = update.span;
+            spansRef.current = next;
+          } else {
+            spansRef.current = [...spansRef.current, update.span];
+            spanIndexRef.current.set(update.span.spanId, spansRef.current.length - 1);
+          }
           dataVersionRef.current++;
         }
         break;
@@ -136,9 +146,15 @@ export function useTrace(): UseTraceResult {
       case 'spanEnd':
       case 'spanUpdate':
         if (update.span) {
-          spansRef.current = spansRef.current.map(s =>
-            s.spanId === update.span!.spanId ? update.span! : s
-          );
+          const existingIndex = spanIndexRef.current.get(update.span.spanId);
+          if (existingIndex !== undefined) {
+            const next = [...spansRef.current];
+            next[existingIndex] = update.span;
+            spansRef.current = next;
+          } else {
+            spansRef.current = [...spansRef.current, update.span];
+            spanIndexRef.current.set(update.span.spanId, spansRef.current.length - 1);
+          }
           dataVersionRef.current++;
         }
         break;
@@ -158,6 +174,16 @@ export function useTrace(): UseTraceResult {
         break;
         
       case 'runEnd':
+        if (update.run && currentRunRef.current) {
+          currentRunRef.current = {
+            ...currentRunRef.current,
+            ...update.run,
+          };
+          dataVersionRef.current++;
+        }
+        break;
+
+      case 'runUpdate':
         if (update.run && currentRunRef.current) {
           currentRunRef.current = {
             ...currentRunRef.current,
