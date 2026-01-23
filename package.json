@@ -1,10 +1,10 @@
 {
-  "name": "codemap-hotel",
-  "version": "1.0.0",
-  "description": "Visualize Claude Code agents as characters in a pixel-art hotel room",
+  "name": "codemap",
+  "version": "2.0.0",
+  "description": "Real-time observability dashboard for AI coding agents (Cursor, Claude Code)",
   "type": "module",
   "bin": {
-    "codemap-hotel": "./bin/setup.js"
+    "codemap": "./bin/setup.js"
   },
   "workspaces": ["server", "client"],
   "scripts": {

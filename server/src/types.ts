@@ -1,96 +1,212 @@
 /**
- * Shared TypeScript Types
- *
- * These types are used across the server for:
- * - Activity events from hooks (file read/write)
- * - Thinking events from hooks (agent state)
- * - Graph data for visualization (file tree)
- *
- * The client has its own copy of these types.
+ * Agent Observability Types
+ * 
+ * Normalized telemetry model for real-time agent tracing.
+ * Supports Cursor and Claude Code hooks.
  */
 
-/** Agent source - which tool the agent is from */
-export type AgentSource = 'claude' | 'cursor' | 'unknown';
+// ============================================================================
+// Core Data Model
+// ============================================================================
+
+/** Source of telemetry events */
+export type AgentSource = 'cursor' | 'claude' | 'demo' | 'unknown';
+
+/** Span execution status */
+export type SpanStatus = 'running' | 'ok' | 'error' | 'timeout' | 'permission_denied' | 'aborted';
+
+/** Run completion status */
+export type RunStatus = 'running' | 'completed' | 'aborted' | 'error';
 
 /**
- * File activity event from file-activity-hook.sh
- * Tracks when an agent reads or writes a file
+ * A Run represents a single agent session (conversation).
+ * Maps to Cursor's conversation_id or Claude's session_id.
  */
-export interface FileActivityEvent {
-  type: 'read-start' | 'read-end' | 'write-start' | 'write-end' | 'search-start' | 'search-end';
-  filePath: string;  // For search: this is the search pattern (glob or regex)
-  agentId?: string;  // Which agent triggered this activity
-  source?: AgentSource;  // Which tool (claude/cursor)
-  timestamp: number;
+export interface Run {
+  runId: string;
+  startedAt: number;
+  endedAt?: number;
+  status: RunStatus;
+  source: AgentSource;
+  projectRoot?: string;
+  agents: Map<string, Agent>;
 }
 
-/** Agent status from stop events */
-export type AgentStatus = 'completed' | 'aborted' | 'error';
-
-export interface ThinkingEvent {
-  type: 'thinking-start' | 'thinking-end' | 'agent-stop';
+/**
+ * An Agent within a run.
+ * A run can have multiple agents (main + subagents via Task tool).
+ */
+export interface Agent {
   agentId: string;
-  source?: AgentSource;  // Which tool (claude/cursor)
-  timestamp: number;
-  toolName?: string;  // Current tool being used (e.g., "Read", "Edit", "Bash")
-  toolInput?: string;  // Abbreviated tool input (file path, command, pattern)
-  agentType?: string;  // Agent type from SessionStart (e.g., "Plan", "Explore", "Bash")
-  model?: string;  // Model name (e.g., "claude-3.5-sonnet") - Cursor provides this
-  duration?: number;  // Operation duration in ms - from afterShellExecution/afterMCPExecution
-  status?: AgentStatus;  // Agent completion status - from stop hook
-  loopCount?: number;  // Number of agent loops - from stop hook
-}
-
-export interface AgentThinkingState {
-  agentId: string;
-  source: AgentSource;  // Which tool this agent is from
-  isThinking: boolean;
-  lastActivity: number;
+  runId: string;
   displayName: string;
-  currentCommand?: string;  // Current tool/command being executed
-  toolInput?: string;  // Abbreviated tool input (file path, command, pattern)
-  waitingForInput?: boolean;  // True when agent is waiting for user input
-  pendingToolStart?: number;  // Timestamp when tool started (for detecting stuck permission prompts)
-  agentType?: string;  // Agent type (e.g., "Plan", "Explore", "Bash") - shown in display name
-  model?: string;  // Model name (e.g., "claude-3.5-sonnet") - shown below agent name
-  lastDuration?: number;  // Last operation duration in ms
-  status?: AgentStatus;  // Completion status (completed/aborted/error)
-  statusTimestamp?: number;  // When status was set (for auto-clearing)
+  agentType?: string;  // e.g., 'generalPurpose', 'explore', 'shell'
+  model?: string;
+  parentAgentId?: string;  // For subagents spawned via Task
+  startedAt: number;
+  endedAt?: number;
 }
 
-export interface GraphNode {
-  id: string;
-  name: string;
-  isFolder: boolean;
-  depth: number;
-  lastActivity?: {
-    type: 'read' | 'write' | 'search';
-    timestamp: number;
-  };
-  activeOperation?: 'read' | 'write' | 'search';  // Currently active operation
-  activityCount: {
-    reads: number;
-    writes: number;
-    searches: number;
-  };
+/**
+ * A Span represents a single tool execution.
+ * Tracks start/end, status, and relevant metadata.
+ */
+export interface Span {
+  spanId: string;
+  runId: string;
+  agentId: string;
+  parentSpanId?: string;  // For Task nesting - links to the Task span that spawned this
+  
+  toolName: string;
+  hookEventName?: string;  // e.g., 'preToolUse', 'postToolUse'
+  turnId?: string;  // Cursor's generation_id
+  
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  status: SpanStatus;
+  
+  inputPreview?: string;  // Sanitized preview of tool input
+  outputPreview?: string;  // Sanitized preview of tool output (optional)
+  errorMessage?: string;  // Error details if status is error/timeout/etc
+  
+  files?: string[];  // Relative file paths involved
+  attachmentsUsed?: AttachmentInfo[];  // Rules/files from Cursor hook attachments
 }
 
-export interface GraphLink {
-  source: string;
-  target: string;
+/** Attachment info from Cursor hooks (rules, files) */
+export interface AttachmentInfo {
+  type: 'file' | 'rule';
+  filePath: string;
 }
 
-export interface GraphData {
-  nodes: GraphNode[];
-  links: GraphLink[];
-}
+// ============================================================================
+// Ingest Event Types (from hooks)
+// ============================================================================
 
-/** Layout update data - sent when git commit triggers a layout refresh */
-export interface LayoutUpdateData {
-  hotFolders: Array<{
-    folder: string;
-    score: number;
-    recentFiles: string[];
-  }>;
+/** Event kinds that hooks can emit */
+export type TelemetryEventKind = 
+  | 'sessionStart'
+  | 'sessionEnd'
+  | 'toolStart'
+  | 'toolEnd'
+  | 'toolFailure'
+  | 'subagentStart'
+  | 'subagentStop'
+  | 'stop'
+  | 'thinkingStart'
+  | 'thinkingEnd'
+  | 'contextCompact'
+  | 'agentResponse';
+
+/**
+ * Raw telemetry event from hooks.
+ * The hook script wraps the raw Cursor/Claude JSON with an eventKind.
+ */
+export interface TelemetryEvent {
+  eventKind: TelemetryEventKind;
   timestamp: number;
+  
+  // Identifiers (at least one required)
+  runId?: string;  // conversation_id (Cursor) or session_id (Claude)
+  agentId?: string;  // For subagents
+  spanId?: string;  // tool_use_id when available
+  
+  // Tool info
+  toolName?: string;
+  toolInput?: unknown;  // Raw tool input (will be sanitized)
+  toolOutput?: unknown;  // Raw tool output (will be sanitized)
+  
+  // Metadata
+  hookEventName?: string;
+  turnId?: string;  // generation_id
+  model?: string;
+  agentType?: string;  // subagent_type for Task
+  source?: AgentSource;
+  
+  // Duration (from afterShellExecution, afterMCPExecution, etc)
+  duration?: number;
+  durationMs?: number;
+  
+  // Error info
+  errorMessage?: string;
+  failureType?: 'error' | 'timeout' | 'permission_denied';
+  
+  // Session/run info
+  status?: string;  // For stop events: completed/aborted/error
+  projectRoot?: string;
+  workspaceRoots?: string[];
+  
+  // Attachments (from beforeReadFile, beforeSubmitPrompt)
+  attachments?: Array<{ type: 'file' | 'rule'; filePath: string }>;
+  
+  // Parent references
+  parentSpanId?: string;
+  parentAgentId?: string;
+  
+  // Thinking (from afterAgentThought)
+  thinkingText?: string;
+  thinkingDurationMs?: number;
+  
+  // Agent response (from afterAgentResponse)
+  responseText?: string;
+  
+  // Context compaction (from preCompact)
+  contextUsagePercent?: number;
+  contextTokens?: number;
+  messagesToCompact?: number;
+  
+  // Raw payload for debugging (not persisted)
+  _raw?: unknown;
+}
+
+// ============================================================================
+// API Response Types
+// ============================================================================
+
+/** Run summary for /api/runs endpoint */
+export interface RunSummary {
+  runId: string;
+  startedAt: number;
+  endedAt?: number;
+  status: RunStatus;
+  source: AgentSource;
+  agentCount: number;
+  spanCount: number;
+  errorCount: number;
+  durationMs?: number;
+}
+
+/** Full run details for /api/runs/:runId */
+export interface RunDetails extends RunSummary {
+  projectRoot?: string;
+  agents: Agent[];
+}
+
+/** Span list response for /api/runs/:runId/spans */
+export interface SpanListResponse {
+  runId: string;
+  spans: Span[];
+  agents: Agent[];
+  hasMore: boolean;
+}
+
+// ============================================================================
+// WebSocket Message Types
+// ============================================================================
+
+export type WsMessageType = 'trace' | 'runUpdate' | 'connected';
+
+export interface WsMessage {
+  type: WsMessageType;
+  data: unknown;
+}
+
+/** Trace update broadcast to clients */
+export interface TraceUpdate {
+  type: 'spanStart' | 'spanEnd' | 'spanUpdate' | 'agentStart' | 'agentEnd' | 'runStart' | 'runEnd';
+  runId: string;
+  span?: Span;
+  agent?: Agent;
+  run?: RunSummary;
 }

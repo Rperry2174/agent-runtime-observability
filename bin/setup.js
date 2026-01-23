@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 /**
- * CodeMap Hotel Setup Script
+ * Agent Observability Setup Script
  *
- * Universal setup for BOTH Claude Code AND Cursor.
- * Configures hooks for whichever tool(s) are present.
- * Run this in your project root: npx codemap-hotel setup
+ * Configures Cursor and Claude Code hooks for telemetry collection.
+ * Run this in your project root: npx codemap setup
  */
 
 import fs from 'fs';
@@ -18,84 +17,90 @@ const TARGET_DIR = process.cwd();
 const SERVER_PORT = 5174;
 const CLIENT_PORT = 5173;
 
-// Hook paths (absolute - works for both tools)
-const FILE_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'file-activity-hook.sh');
-const THINKING_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'thinking-hook.sh');
-const GIT_POST_COMMIT_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'git-post-commit.sh');
+// Hook path (absolute)
+const TELEMETRY_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'telemetry-hook.sh');
 
-// Claude settings to merge
-const hooksConfig = {
+// ============================================================================
+// Cursor Configuration
+// ============================================================================
+
+const cursorHooksConfig = {
+  version: 1,
+  hooks: {
+    // Session lifecycle
+    sessionStart: [{ command: `${TELEMETRY_HOOK} sessionStart` }],
+    sessionEnd: [{ command: `${TELEMETRY_HOOK} sessionEnd` }],
+    
+    // Tool lifecycle (generic - fires for all tools)
+    preToolUse: [{ command: `${TELEMETRY_HOOK} toolStart` }],
+    postToolUse: [{ command: `${TELEMETRY_HOOK} toolEnd` }],
+    postToolUseFailure: [{ command: `${TELEMETRY_HOOK} toolFailure` }],
+    
+    // Subagent lifecycle
+    subagentStart: [{ command: `${TELEMETRY_HOOK} subagentStart` }],
+    subagentStop: [{ command: `${TELEMETRY_HOOK} subagentStop` }],
+    
+    // Agent thinking and responses
+    afterAgentThought: [{ command: `${TELEMETRY_HOOK} thinkingEnd` }],
+    afterAgentResponse: [{ command: `${TELEMETRY_HOOK} agentResponse` }],
+    
+    // Context compaction
+    preCompact: [{ command: `${TELEMETRY_HOOK} contextCompact` }],
+    
+    // Completion status
+    stop: [{ command: `${TELEMETRY_HOOK} stop` }],
+    
+    // Attachments visibility (rules, files)
+    beforeReadFile: [{ command: `${TELEMETRY_HOOK} toolStart` }],
+    beforeSubmitPrompt: [{ command: `${TELEMETRY_HOOK} toolStart` }],
+  }
+};
+
+// ============================================================================
+// Claude Code Configuration
+// ============================================================================
+
+const claudeHooksConfig = {
   hooks: {
     PreToolUse: [
       {
-        matcher: "Read",
-        hooks: [{ type: "command", command: `${FILE_HOOK} read-start` }]
-      },
-      {
-        matcher: "Edit|Write|MultiEdit",
-        hooks: [{ type: "command", command: `${FILE_HOOK} write-start` }]
-      },
-      {
         matcher: ".*",
-        hooks: [{ type: "command", command: `${THINKING_HOOK} thinking-end` }]
+        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolStart` }]
       }
     ],
     PostToolUse: [
       {
-        matcher: "Read",
-        hooks: [{ type: "command", command: `${FILE_HOOK} read-end` }]
-      },
-      {
-        matcher: "Edit|Write|MultiEdit",
-        hooks: [{ type: "command", command: `${FILE_HOOK} write-end` }]
-      },
+        matcher: ".*",
+        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolEnd` }]
+      }
+    ],
+    Stop: [
       {
         matcher: ".*",
-        hooks: [{ type: "command", command: `${THINKING_HOOK} thinking-start` }]
+        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} stop` }]
       }
     ],
     Notification: [
       {
         matcher: ".*",
-        hooks: [{ type: "command", command: `${THINKING_HOOK} thinking-end` }]
+        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolStart` }]
       }
     ]
   }
 };
 
-// Permissions to add (allows hooks to run without prompting)
-const permissionsConfig = {
+const claudePermissionsConfig = {
   permissions: {
     allow: [
-      `Bash(${FILE_HOOK} read:*)`,
-      `Bash(${FILE_HOOK} write:*)`,
-      `Bash(${THINKING_HOOK} thinking-start:*)`,
-      `Bash(${THINKING_HOOK} thinking-end:*)`
+      `Bash(${TELEMETRY_HOOK}:*)`
     ]
   }
 };
 
-// Cursor hooks configuration (.cursor/hooks.json)
-const cursorHooksConfig = {
-  version: 1,
-  hooks: {
-    // File operations
-    beforeReadFile: [{ command: `${FILE_HOOK} read-start` }],
-    afterFileEdit: [{ command: `${FILE_HOOK} write-end` }],
-    // Shell/command operations
-    beforeShellExecution: [{ command: `${THINKING_HOOK} thinking-end` }],
-    afterShellExecution: [{ command: `${THINKING_HOOK} thinking-start` }],
-    // MCP tool operations
-    beforeMCPExecution: [{ command: `${THINKING_HOOK} thinking-end` }],
-    afterMCPExecution: [{ command: `${THINKING_HOOK} thinking-start` }],
-    // Agent thinking
-    afterAgentThought: [{ command: `${THINKING_HOOK} thinking-start` }],
-    // Prompt submission
-    beforeSubmitPrompt: [{ command: `${THINKING_HOOK} thinking-end` }]
-  }
-};
+// ============================================================================
+// Utilities
+// ============================================================================
 
-// Check if a port is in use
 function isPortInUse(port) {
   return new Promise((resolve) => {
     exec(`lsof -i :${port} -t`, (err, stdout) => {
@@ -104,17 +109,15 @@ function isPortInUse(port) {
   });
 }
 
-// Open URL in default browser
 function openBrowser(url) {
   const cmd = process.platform === 'darwin' ? 'open' :
               process.platform === 'win32' ? 'start' : 'xdg-open';
   exec(`${cmd} ${url}`);
 }
 
-// Start the dev server
 function startServer() {
   return new Promise((resolve, reject) => {
-    console.log('🚀 Starting CodeMap server...\n');
+    console.log('Starting observability server...\n');
 
     const child = spawn('npm', ['run', 'dev'], {
       cwd: CODEMAP_ROOT,
@@ -123,55 +126,26 @@ function startServer() {
       env: { ...process.env, PROJECT_ROOT: TARGET_DIR }
     });
 
-    // Wait a bit for server to start, then resolve
     setTimeout(() => resolve(child), 3000);
-
     child.on('error', reject);
   });
 }
 
-// Main "run" command - does everything automatically
-async function run() {
-  console.log('🏨 CodeMap Hotel\n');
-  console.log(`Project: ${TARGET_DIR}\n`);
+// ============================================================================
+// Setup Functions
+// ============================================================================
 
-  // Step 1: Setup hooks if not already configured
-  const settingsPath = path.join(TARGET_DIR, '.claude', 'settings.local.json');
-  const needsSetup = !fs.existsSync(settingsPath) ||
-    !fs.readFileSync(settingsPath, 'utf8').includes('file-activity-hook');
-
-  if (needsSetup) {
-    console.log('📝 Setting up hooks...');
-    setupHooks();
-    console.log('');
-  } else {
-    console.log('✓ Hooks already configured\n');
+function setupCursorHooks() {
+  const cursorDir = path.join(TARGET_DIR, '.cursor');
+  if (!fs.existsSync(cursorDir)) {
+    fs.mkdirSync(cursorDir, { recursive: true });
   }
 
-  // Step 2: Check if server is already running
-  const serverRunning = await isPortInUse(SERVER_PORT);
-  const clientRunning = await isPortInUse(CLIENT_PORT);
-
-  if (serverRunning && clientRunning) {
-    console.log('✓ Server already running\n');
-    console.log('🌐 Opening http://localhost:5173/hotel\n');
-    openBrowser('http://localhost:5173/hotel');
-    console.log('Start Claude Code or Cursor in your project to see agents! 🎮');
-    return;
-  }
-
-  // Step 3: Start server
-  console.log('Starting visualization server...\n');
-  await startServer();
-
-  // Step 4: Open browser
-  console.log('\n🌐 Opening http://localhost:5173/hotel\n');
-  setTimeout(() => openBrowser('http://localhost:5173/hotel'), 2000);
-
-  console.log('Start Claude Code or Cursor in your project to see agents! 🎮\n');
+  const hooksPath = path.join(cursorDir, 'hooks.json');
+  fs.writeFileSync(hooksPath, JSON.stringify(cursorHooksConfig, null, 2));
+  console.log('  Configured .cursor/hooks.json (Cursor)');
 }
 
-// Setup Claude Code hooks
 function setupClaudeHooks() {
   const claudeDir = path.join(TARGET_DIR, '.claude');
   if (!fs.existsSync(claudeDir)) {
@@ -184,129 +158,131 @@ function setupClaudeHooks() {
   if (fs.existsSync(settingsPath)) {
     try {
       settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    } catch (e) {
-      // Ignore parse errors, start fresh
+    } catch {
+      // Start fresh on parse error
     }
   }
 
   // Merge hooks
-  settings.hooks = hooksConfig.hooks;
+  settings.hooks = claudeHooksConfig.hooks;
 
   // Merge permissions
   if (!settings.permissions) settings.permissions = {};
   if (!settings.permissions.allow) settings.permissions.allow = [];
 
+  // Remove old codemap permissions
   settings.permissions.allow = settings.permissions.allow.filter(
-    p => !p.includes('file-activity-hook') && !p.includes('thinking-hook')
+    p => !p.includes('telemetry-hook') && !p.includes('file-activity-hook') && !p.includes('thinking-hook')
   );
-  settings.permissions.allow.push(...permissionsConfig.permissions.allow);
+  settings.permissions.allow.push(...claudePermissionsConfig.permissions.allow);
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  console.log('✓ Configured .claude/settings.local.json (Claude Code)');
+  console.log('  Configured .claude/settings.local.json (Claude Code)');
 }
 
-// Setup Cursor hooks
-function setupCursorHooks() {
-  const cursorDir = path.join(TARGET_DIR, '.cursor');
-  if (!fs.existsSync(cursorDir)) {
-    fs.mkdirSync(cursorDir, { recursive: true });
-  }
+function setupGitignore() {
+  const gitignorePath = path.join(TARGET_DIR, '.gitignore');
+  const entry = '\n# Agent Observability traces\n.codemap/\n';
 
-  const hooksPath = path.join(cursorDir, 'hooks.json');
-  fs.writeFileSync(hooksPath, JSON.stringify(cursorHooksConfig, null, 2));
-  console.log('✓ Configured .cursor/hooks.json (Cursor)');
-}
-
-// Setup git post-commit hook for layout refresh
-function setupGitHook() {
-  const gitDir = path.join(TARGET_DIR, '.git');
-  if (!fs.existsSync(gitDir)) {
-    console.log('⚠ No .git directory found - skipping git hook');
-    return;
-  }
-
-  const hooksDir = path.join(gitDir, 'hooks');
-  if (!fs.existsSync(hooksDir)) {
-    fs.mkdirSync(hooksDir, { recursive: true });
-  }
-
-  const postCommitPath = path.join(hooksDir, 'post-commit');
-
-  // Check if post-commit hook already exists
-  if (fs.existsSync(postCommitPath)) {
-    const existing = fs.readFileSync(postCommitPath, 'utf8');
-    // Check if our hook is already integrated
-    if (existing.includes('codemap') || existing.includes('git-post-commit.sh')) {
-      console.log('✓ Git post-commit hook already configured');
-      return;
+  if (fs.existsSync(gitignorePath)) {
+    const content = fs.readFileSync(gitignorePath, 'utf8');
+    if (!content.includes('.codemap/')) {
+      fs.appendFileSync(gitignorePath, entry);
+      console.log('  Added .codemap/ to .gitignore');
     }
-    // Append to existing hook
-    const updated = existing + `\n\n# CodeMap Hotel - refresh layout on commit\n${GIT_POST_COMMIT_HOOK}\n`;
-    fs.writeFileSync(postCommitPath, updated);
-    console.log('✓ Added CodeMap to existing git post-commit hook');
   } else {
-    // Create new hook
-    const hookContent = `#!/bin/bash
-# Git post-commit hook
-# Auto-generated by CodeMap Hotel setup
-
-# CodeMap Hotel - refresh layout on commit
-${GIT_POST_COMMIT_HOOK}
-`;
-    fs.writeFileSync(postCommitPath, hookContent);
-    fs.chmodSync(postCommitPath, '755');
-    console.log('✓ Created git post-commit hook (layout refreshes on commit)');
+    fs.writeFileSync(gitignorePath, entry.trim() + '\n');
+    console.log('  Created .gitignore with .codemap/');
   }
 }
 
-// Setup hooks for ALL detected tools
-function setupHooks() {
-  // Always setup Claude Code (it's our primary target)
-  setupClaudeHooks();
-
-  // Also setup Cursor (universal support)
-  setupCursorHooks();
-
-  // Setup git hook for layout refresh on commits
-  setupGitHook();
-
-  // Make hooks executable
+function makeHookExecutable() {
   try {
-    fs.chmodSync(FILE_HOOK, '755');
-    fs.chmodSync(THINKING_HOOK, '755');
-    fs.chmodSync(GIT_POST_COMMIT_HOOK, '755');
-  } catch (e) {
+    fs.chmodSync(TELEMETRY_HOOK, '755');
+  } catch {
     // Ignore chmod errors
   }
 }
 
-function setup() {
-  console.log('🏨 CodeMap Hotel Setup\n');
-  console.log(`CodeMap installed at: ${CODEMAP_ROOT}`);
-  console.log(`Target project: ${TARGET_DIR}\n`);
-
-  setupHooks();
-
-  console.log('\nSetup complete! To start visualization:\n');
-  console.log(`  cd ${TARGET_DIR}`);
-  console.log('  codemap-hotel\n');
+function setupAll() {
+  console.log('\nConfiguring hooks...');
+  
+  setupCursorHooks();
+  setupClaudeHooks();
+  setupGitignore();
+  makeHookExecutable();
+  
+  console.log('');
 }
 
+// ============================================================================
+// Commands
+// ============================================================================
+
+async function run() {
+  console.log('Agent Observability\n');
+  console.log(`Project: ${TARGET_DIR}\n`);
+
+  // Check if hooks are already configured
+  const cursorHooksPath = path.join(TARGET_DIR, '.cursor', 'hooks.json');
+  const needsSetup = !fs.existsSync(cursorHooksPath) ||
+    !fs.readFileSync(cursorHooksPath, 'utf8').includes('telemetry-hook');
+
+  if (needsSetup) {
+    setupAll();
+  } else {
+    console.log('Hooks already configured\n');
+  }
+
+  // Check if server is already running
+  const serverRunning = await isPortInUse(SERVER_PORT);
+  const clientRunning = await isPortInUse(CLIENT_PORT);
+
+  if (serverRunning && clientRunning) {
+    console.log('Server already running\n');
+    console.log(`Opening http://localhost:${CLIENT_PORT}/observability\n`);
+    openBrowser(`http://localhost:${CLIENT_PORT}/observability`);
+    return;
+  }
+
+  // Start server
+  await startServer();
+
+  // Open browser
+  console.log(`\nOpening http://localhost:${CLIENT_PORT}/observability\n`);
+  setTimeout(() => openBrowser(`http://localhost:${CLIENT_PORT}/observability`), 2000);
+}
+
+function setup() {
+  console.log('Agent Observability Setup\n');
+  console.log(`Codemap: ${CODEMAP_ROOT}`);
+  console.log(`Target:  ${TARGET_DIR}\n`);
+
+  setupAll();
+
+  console.log('Setup complete!\n');
+  console.log('To start the observability dashboard:\n');
+  console.log(`  cd ${CODEMAP_ROOT}`);
+  console.log('  npm run dev\n');
+  console.log(`Then open: http://localhost:${CLIENT_PORT}/observability\n`);
+}
+
+// ============================================================================
 // CLI
+// ============================================================================
+
 const command = process.argv[2];
 
 if (command === 'setup') {
   setup();
 } else if (command === 'start') {
-  // Legacy start command
   run();
 } else if (!command) {
-  // Default: run everything
   run();
 } else {
-  console.log('CodeMap Hotel - Visualize Claude Code agents\n');
+  console.log('Agent Observability\n');
   console.log('Usage:');
-  console.log('  codemap-hotel         - Setup hooks, start server, open browser');
-  console.log('  codemap-hotel setup   - Only configure hooks for current project');
+  console.log('  codemap          - Setup hooks and start server');
+  console.log('  codemap setup    - Only configure hooks');
   console.log('');
 }

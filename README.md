@@ -1,121 +1,108 @@
-# 🏨 CodeMap Hotel
+# Agent Observability
 
-**Watch your AI coding agents come to life!** See Claude Code and Cursor as pixel-art characters moving through a hotel, working at desks, reading files, and writing code in real-time.
+Real-time tracing and visualization for AI coding agents (Cursor, Claude Code).
 
-![CodeMap Hotel Demo](docs/demo.gif)
+See what your agents are doing: tool calls, durations, errors, subagent workflows — all in a timeline UI.
 
-## ⚡ One Command Setup
-
-Paste this into Claude Code or Cursor in any project:
+## Quick Start
 
 ```bash
-npx github:JamsusMaximus/codemap
-```
-
-That's it! The hotel opens automatically and your agent appears. ✨
-
----
-
-## ✨ Features
-
-| Feature | Description |
-|---------|-------------|
-| 🎮 **Live Visualization** | Watch agents move between rooms as they work on your code |
-| 🏢 **Smart Layout** | Folders become rooms, files become desks, arranged by git activity |
-| 👥 **Multi-Agent** | See up to 10 agents working simultaneously |
-| 💬 **Speech Bubbles** | See what tool and file each agent is working on |
-| 🦘 **Stuck Detection** | Agents bounce when waiting for input — never waste time on a stuck agent |
-| 🎨 **Themed Rooms** | Components (blue), Server (green), Tests (peach), and more |
-| ⚡ **Real-time Updates** | Instant feedback as agents read, write, and think |
-| 🔄 **Dynamic Refresh** | Hotel reorganizes on each git commit |
-
-### 🤖 Works With
-
-- ✅ **Claude Code** — Full support, automatic hook configuration
-- ✅ **Cursor** — Enhanced features: model name, completion badges, operation timing
-
----
-
-## 🎯 What You'll See
-
-- 💻 **Computer screens** light up when files are accessed
-- 🟡 **Yellow glow** = reading a file
-- 🟢 **Green glow** = writing code
-- 💭 **Thinking indicator** when agent is processing
-- 🚶 **Walking animations** as agents move between rooms
-- 🦘 **Bouncing** when agent needs your input or permission
-- ☕ **Coffee shop** where idle agents hang out
-
----
-
-## 🛠 Alternative Setup
-
-### Clone and Run Locally
-
-```bash
+# Clone and install
 git clone https://github.com/JamsusMaximus/codemap
 cd codemap
 npm install
+
+# Start the observability server + dashboard
 npm run dev
 ```
 
-Then open http://localhost:5173/hotel
+Then open http://localhost:5173/observability
 
-### Setup Hooks Only (no server start)
+## Setup Hooks
+
+In your project directory, run:
 
 ```bash
 npx github:JamsusMaximus/codemap setup
 ```
 
----
+This configures hooks for both Cursor (`.cursor/hooks.json`) and Claude Code (`.claude/settings.local.json`).
 
-## 📖 How It Works
+## Features
+
+- **Real-time tool call visibility** — See which tool each agent is running right now
+- **Agent swimlanes** — Timeline view with per-agent lanes
+- **Timing/duration** — Know how long each operation takes
+- **Error states** — Clearly see failures, timeouts, and permission denials
+- **Subagent nesting** — Track Task tool spawns and their child agent work
+- **Hook metadata** — See which hooks and rules fired
+- **Demo mode** — Run a demo to see the dashboard in action
+
+## Architecture
 
 ```
-🤖 AI Agent      →  📡 Hooks      →  🖥 Server      →  🎨 Browser
-(Claude/Cursor)     (capture)       (broadcast)       (render)
+Cursor/Claude Hooks → Telemetry API → TraceStore → WebSocket → Dashboard
+                                         ↓
+                                     JSONL Logs
 ```
 
-1. Your AI agent reads/writes files or runs commands
-2. Hook scripts capture these events
-3. Server tracks activity and broadcasts via WebSocket
-4. Browser renders the pixel-art hotel in real-time
+### Server (Port 5174)
 
----
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/telemetry` | Ingest hook events |
+| `GET /api/runs` | List recent runs |
+| `GET /api/runs/:id` | Run details |
+| `GET /api/runs/:id/spans` | Run spans |
+| `POST /api/demo/start` | Start demo run |
+| `WS /ws` | Real-time updates |
 
-## 🔧 Technical Details
+### Client (Port 5173)
 
-<details>
-<summary>Server API (Port 5174)</summary>
+| Route | Description |
+|-------|-------------|
+| `/observability` | Main dashboard |
 
-- `POST /api/activity` — File read/write events
-- `POST /api/thinking` — Agent thinking state
-- `GET /api/graph` — File tree data
-- `GET /api/hot-folders` — Git-ranked folders
-- WebSocket at `/ws` for real-time updates
+## Development
 
-</details>
+```bash
+# Start dev servers (server + client)
+npm run dev
 
-<details>
-<summary>Client Routes (Port 5173)</summary>
+# Run tests
+npm test --workspaces
 
-- `/hotel` — Pixel-art hotel visualization
-- `/` — Force-directed graph view
+# Server only
+cd server && npm run dev
 
-</details>
+# Client only
+cd client && npm run dev
+```
 
-<details>
-<summary>Hook Scripts</summary>
+## Hooks Reference
 
-- `file-activity-hook.sh` — Captures file operations
-- `thinking-hook.sh` — Captures agent state, model, duration
-- `cursor-stop-hook.sh` — Captures Cursor completion status
-- `git-post-commit.sh` — Triggers layout refresh
+The telemetry hook script (`hooks/telemetry-hook.sh`) handles all events:
 
-</details>
+**Cursor hooks:**
+- `sessionStart/sessionEnd` — Run lifecycle
+- `preToolUse/postToolUse/postToolUseFailure` — Tool spans
+- `subagentStart/subagentStop` — Subagent lifecycle
+- `stop` — Completion status
+- `beforeReadFile/beforeSubmitPrompt` — Attachments visibility
 
-<details>
-<summary>Troubleshooting</summary>
+**Claude Code hooks:**
+- `PreToolUse/PostToolUse` — Tool spans
+- `Stop` — Completion status
+
+## Data Model
+
+- **Run**: A single agent session (maps to `conversation_id` or `session_id`)
+- **Agent**: An agent within a run (main agent + subagents)
+- **Span**: A single tool execution with start/end times, status, and metadata
+
+Traces are persisted to `.codemap/traces/<runId>.jsonl` for replay and debugging.
+
+## Troubleshooting
 
 **Server not starting?**
 ```bash
@@ -125,29 +112,14 @@ curl http://localhost:5174/api/health
 
 **Hooks not firing?**
 ```bash
-tail -f /tmp/codemap-hook.log
+tail -f /tmp/observability-hook.log
 ```
 
-**No agents appearing?**
+**No spans appearing?**
 ```bash
-curl http://localhost:5174/api/thinking | jq
+curl http://localhost:5174/api/runs | jq
 ```
 
-</details>
+## License
 
-<details>
-<summary>Development</summary>
-
-```bash
-npm install
-npm run dev           # Start server + client
-npm test --workspaces # Run all 248 tests
-```
-
-</details>
-
----
-
-## 📄 License
-
-MIT — Built with ❤️ for the AI coding community
+MIT
