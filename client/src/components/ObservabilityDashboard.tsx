@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useTrace } from '../hooks/useTrace';
 import {
   Span,
@@ -46,6 +47,9 @@ const API_URL = 'http://localhost:5174/api';
 // ============================================================================
 
 export function ObservabilityDashboard() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlRunId = searchParams.get('runId');
+
   const {
     currentRunRef,
     agentsRef,
@@ -56,7 +60,7 @@ export function ObservabilityDashboard() {
     selectedRunId,
     selectRun,
     refreshRuns,
-  } = useTrace();
+  } = useTrace({ autoSelect: !urlRunId });
 
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [, forceUpdate] = useState(0);
@@ -71,6 +75,36 @@ export function ObservabilityDashboard() {
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   
   const lastVersionRef = useRef(0);
+
+  const updateRunParam = useCallback((runId: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (runId) {
+      next.set('runId', runId);
+    } else {
+      next.delete('runId');
+    }
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  const handleSelectRun = useCallback((runId: string) => {
+    if (!runId) return;
+    selectRun(runId);
+    updateRunParam(runId);
+  }, [selectRun, updateRunParam]);
+
+  // Keep selected run in sync with URL.
+  useEffect(() => {
+    if (urlRunId) {
+      if (urlRunId !== selectedRunId) {
+        const exists = recentRuns.some(r => r.runId === urlRunId);
+        if (exists) {
+          selectRun(urlRunId);
+        }
+      }
+    } else if (selectedRunId) {
+      updateRunParam(selectedRunId);
+    }
+  }, [urlRunId, selectedRunId, recentRuns, selectRun, updateRunParam]);
   
   // Animation frame for live updates
   useEffect(() => {
@@ -159,7 +193,7 @@ export function ObservabilityDashboard() {
       if (data.runId) {
         setTimeout(() => {
           refreshRuns();
-          selectRun(data.runId);
+          handleSelectRun(data.runId);
         }, 500);
       }
     } catch (err) {
@@ -239,7 +273,7 @@ export function ObservabilityDashboard() {
           {recentRuns.length > 0 && (
             <select
               value={selectedRunId || ''}
-              onChange={(e) => selectRun(e.target.value)}
+              onChange={(e) => handleSelectRun(e.target.value)}
               style={styles.runSelector}
             >
               {recentRuns.map(r => (
@@ -1109,8 +1143,6 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#111118',
     borderRadius: '16px',
     padding: '24px',
-    maxHeight: 'calc(100vh - 320px)',
-    overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
   },
@@ -1153,9 +1185,7 @@ const styles: Record<string, React.CSSProperties> = {
   timeline: {
     position: 'relative',
     flex: 1,
-    overflowY: 'auto',
-    overflowX: 'hidden',
-    paddingRight: '8px',
+    overflow: 'visible',
   },
   timeRuler: {
     display: 'flex',

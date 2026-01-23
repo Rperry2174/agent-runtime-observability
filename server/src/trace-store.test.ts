@@ -88,6 +88,41 @@ describe('TraceStore', () => {
       expect(updates.some(u => u.type === 'runStart')).toBe(true);
       expect(updates.some(u => u.type === 'runEnd')).toBe(true);
     });
+
+    it('should force-close any running spans when the run ends', () => {
+      const t0 = Date.now();
+
+      store.processEvent({
+        eventKind: 'sessionStart',
+        timestamp: t0,
+        runId: 'run-123',
+        source: 'cursor',
+      });
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0 + 10,
+        runId: 'run-123',
+        spanId: 'span-1',
+        toolName: 'Read',
+      });
+
+      store.processEvent({
+        eventKind: 'sessionEnd',
+        timestamp: t0 + 1000,
+        runId: 'run-123',
+        status: 'completed',
+      });
+
+      const spans = store.getSpans('run-123')?.spans || [];
+      const span = spans.find(s => s.spanId === 'span-1');
+      expect(span?.status).toBe('ok');
+      expect(span?.endedAt).toBeDefined();
+      expect(span?.durationMs).toBeGreaterThan(0);
+
+      // Should also broadcast a spanEnd update for the forced-closed span
+      expect(updates.some(u => u.type === 'spanEnd' && u.span?.spanId === 'span-1')).toBe(true);
+    });
   });
 
   describe('Span tracking', () => {
@@ -197,6 +232,39 @@ describe('TraceStore', () => {
       expect(readSpan?.status).toBe('running');
     });
 
+    it('should normalize spanId/runId so toolEnd can close spans with newline separators', () => {
+      const t0 = Date.now();
+
+      // Start a run whose id contains a newline separator
+      store.processEvent({
+        eventKind: 'sessionStart',
+        timestamp: t0,
+        runId: 'run-123\nfc_abc',
+        source: 'cursor',
+      });
+
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0 + 10,
+        runId: 'run-123\nfc_abc',
+        spanId: 'call_foo\nfc_bar',
+        toolName: 'Grep',
+      });
+
+      store.processEvent({
+        eventKind: 'toolEnd',
+        timestamp: t0 + 50,
+        runId: 'run-123\nfc_abc',
+        spanId: 'call_foo\nfc_bar',
+        duration: 40,
+      });
+
+      const result = store.getSpans('run-123fc_abc');
+      expect(result?.spans).toHaveLength(1);
+      expect(result?.spans[0].spanId).toBe('call_foofc_bar');
+      expect(result?.spans[0].status).toBe('ok');
+    });
+
     it('should not clobber toolName when the same spanId is updated', () => {
       const t0 = Date.now();
 
@@ -286,6 +354,42 @@ describe('TraceStore', () => {
 
       expect(newSpan?.status).toBe('ok');
       expect(oldSpan?.status).toBe('running');
+    });
+
+    it('should attribute Task tool spans to the parent run even when a subagent is active', () => {
+      const t0 = Date.now();
+
+      // Start a run
+      store.processEvent({
+        eventKind: 'sessionStart',
+        timestamp: t0,
+        runId: 'run-123',
+        source: 'cursor',
+      });
+
+      // Start a subagent so it's considered active for attribution
+      store.processEvent({
+        eventKind: 'subagentStart',
+        timestamp: t0 + 10,
+        runId: 'run-123',
+        agentId: 'subagent-1',
+        agentType: 'generalPurpose',
+        source: 'cursor',
+      });
+
+      // Now a Task toolStart comes in (from the parent) while the subagent is active
+      store.processEvent({
+        eventKind: 'toolStart',
+        timestamp: t0 + 20,
+        runId: 'run-123',
+        spanId: 'task-span',
+        toolName: 'Task',
+        source: 'cursor',
+      });
+
+      const result = store.getSpans('run-123');
+      const taskSpan = result?.spans.find(s => s.spanId === 'task-span');
+      expect(taskSpan?.agentId).toBe('run-123');
     });
 
     it('should broadcast spanStart and spanEnd updates', () => {

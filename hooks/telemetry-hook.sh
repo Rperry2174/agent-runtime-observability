@@ -12,6 +12,7 @@ EVENT_KIND="$1"
 SERVER_URL="http://localhost:5174/api/telemetry"
 LOG_FILE="/tmp/observability-hook.log"
 DEBUG_LOG="/tmp/observability-hook-debug.log"
+SHELL_SPAN_FILE="/tmp/observability-shell-spans.log"
 
 # Enable debug mode with HOOK_DEBUG=1
 DEBUG_MODE="${HOOK_DEBUG:-0}"
@@ -40,12 +41,47 @@ if [ -z "$RUN_ID" ]; then
     exit 0
 fi
 
+generate_shell_span_id() {
+  if command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  else
+    printf 'shell_%s_%s_%s' "$(date +%s)" "$$" "$RANDOM"
+  fi
+}
+
+sanitize_shell_command() {
+  printf '%s' "$1" | tr '\t\r\n' ' '
+}
+
+SHELL_COMMAND=""
+SHELL_SPAN_ID=""
+if [ "$EVENT_KIND" = "shellStart" ] || [ "$EVENT_KIND" = "shellEnd" ]; then
+  RAW_COMMAND=$(echo "$INPUT" | /usr/bin/jq -r '.command // empty' 2>/dev/null)
+  SHELL_COMMAND=$(sanitize_shell_command "$RAW_COMMAND")
+
+  if [ "$EVENT_KIND" = "shellStart" ]; then
+    SHELL_SPAN_ID=$(generate_shell_span_id)
+    printf '%s\t%s\t%s\n' "$RUN_ID" "$SHELL_COMMAND" "$SHELL_SPAN_ID" >> "$SHELL_SPAN_FILE"
+  else
+    if [ -f "$SHELL_SPAN_FILE" ]; then
+      MATCH_LINE=$(awk -v r="$RUN_ID" -v c="$SHELL_COMMAND" 'BEGIN{FS="\t"} $1==r && $2==c {print $0; exit}' "$SHELL_SPAN_FILE")
+      if [ -n "$MATCH_LINE" ]; then
+        SHELL_SPAN_ID=$(printf '%s' "$MATCH_LINE" | awk -F'\t' '{print $3}')
+        awk -v r="$RUN_ID" -v c="$SHELL_COMMAND" 'BEGIN{FS=OFS="\t"} {if($1==r && $2==c && !done){done=1; next} print}' "$SHELL_SPAN_FILE" > "${SHELL_SPAN_FILE}.tmp" \
+          && mv "${SHELL_SPAN_FILE}.tmp" "$SHELL_SPAN_FILE"
+      fi
+    fi
+  fi
+fi
+
 # Build JSON payload safely using jq (avoid manual escaping).
 # Any truncation happens on the encoded string form.
 PAYLOAD=$(
   echo "$INPUT" | /usr/bin/jq -c \
     --arg eventKind "$EVENT_KIND" \
     --argjson timestamp "$(date +%s000)" \
+    --arg shellSpanId "$SHELL_SPAN_ID" \
+    --arg shellCommand "$SHELL_COMMAND" \
     '
       def trunc($n):
         if . == null then null
@@ -59,14 +95,14 @@ PAYLOAD=$(
         runId: (.conversation_id // .session_id // null),
         source: (if .conversation_id then "cursor" elif .session_id then "claude" else null end),
 
-        spanId: (.tool_use_id // null),
+        spanId: (if ($eventKind == "shellStart" or $eventKind == "shellEnd") and $shellSpanId != "" then $shellSpanId else (.tool_use_id // null) end),
         agentId: (.agent_id // .agentId // .subagent_id // .task_agent_id // null),
         parentAgentId: (.parent_agent_id // .parentAgentId // null),
         parentSpanId: (.parent_span_id // .parentSpanId // .task_span_id // null),
 
-        toolName: (.tool_name // null),
-        toolInput: (.tool_input? | trunc(500)),
-        toolOutput: (.tool_output? | trunc(300)),
+        toolName: (if $eventKind == "shellStart" or $eventKind == "shellEnd" then "Shell" else (.tool_name // null) end),
+        toolInput: (if $eventKind == "shellStart" then ({command: $shellCommand, cwd: (.cwd // .working_directory // null)} | trunc(500)) else (.tool_input? | trunc(500)) end),
+        toolOutput: (if $eventKind == "shellEnd" then (.output? | trunc(300)) else (.tool_output? | trunc(300)) end),
         prompt: (.prompt? | trunc(1000)),
 
         hookEventName: (.hook_event_name // null),

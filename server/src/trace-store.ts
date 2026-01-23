@@ -183,6 +183,20 @@ export class TraceStore {
   /** Process incoming telemetry event */
   processEvent(event: TelemetryEvent): void {
     const now = Date.now();
+    const normalizeId = (value?: string) => {
+      if (!value) return value;
+      // Cursor sometimes includes newline/tab separators inside IDs (e.g. tool_use_id).
+      // Normalize them away so toolStart/toolEnd correlate reliably.
+      return value.replace(/[\r\n\t]/g, '');
+    };
+
+    event.runId = normalizeId(event.runId);
+    event.agentId = normalizeId(event.agentId);
+    event.parentAgentId = normalizeId(event.parentAgentId);
+    event.spanId = normalizeId(event.spanId);
+    event.parentSpanId = normalizeId(event.parentSpanId);
+    event.turnId = normalizeId(event.turnId);
+
     const runId = event.runId || 'unknown';
 
     // Lightweight debug event log (avoid persisting raw tool input/output)
@@ -245,10 +259,16 @@ export class TraceStore {
         break;
       // Shell execution hooks
       case 'shellStart':
-        this.handleToolStart({ ...event, toolName: event.toolName || 'Shell' }, now);
+        // beforeShellExecution events don't include tool_use_id; ignore to avoid
+        // duplicate/misattributed Shell spans (preToolUse already captures these).
+        if (event.spanId) {
+          this.handleToolStart({ ...event, toolName: event.toolName || 'Shell' }, now);
+        }
         break;
       case 'shellEnd':
-        this.handleToolEnd({ ...event, toolName: event.toolName || 'Shell' }, now);
+        if (event.spanId) {
+          this.handleToolEnd({ ...event, toolName: event.toolName || 'Shell' }, now);
+        }
         break;
       // MCP execution hook
       case 'mcpEnd':
@@ -371,15 +391,37 @@ export class TraceStore {
       }
     }
     
-    // End all active spans
+    // End any still-running spans (active + any that may have desynced).
+    // Important: broadcast spanEnd + persist, otherwise the UI can show "stuck" running spans.
+    const endStatus: SpanStatus = run.status === 'error' ? 'aborted' : 'ok';
+    const runSpans = this.spans.get(runId) || [];
     const activeMap = this.activeSpans.get(runId);
+
+    const toClose = runSpans.filter(s => s.status === 'running' && typeof s.endedAt !== 'number');
+    for (const span of toClose) {
+      span.endedAt = run.endedAt;
+      span.status = endStatus;
+      span.durationMs = span.endedAt - span.startedAt;
+
+      // Remove from active/pending correlation maps
+      activeMap?.delete(span.spanId);
+      this.pendingSpans.delete(span.spanId);
+
+      // Persist + broadcast closure
+      this.appendToFile(runId, 'span', span);
+      this.broadcast({ type: 'spanEnd', runId, span });
+    }
+
+    // Clear any remaining active spans (defensive)
     if (activeMap) {
-      for (const span of activeMap.values()) {
-        span.endedAt = run.endedAt;
-        span.status = run.status === 'error' ? 'aborted' : 'ok';
-        span.durationMs = span.endedAt - span.startedAt;
-      }
       activeMap.clear();
+    }
+
+    // Also remove any lingering pending spans that belong to this run
+    for (const [spanId, span] of this.pendingSpans) {
+      if (span.runId === runId) {
+        this.pendingSpans.delete(spanId);
+      }
     }
     
     // Persist final state
@@ -738,7 +780,8 @@ export class TraceStore {
     const agent = run.agents.get(agentId);
     if (!agent) return;
     
-    agent.endedAt = event.timestamp || now;
+    const endedAt = event.timestamp || now;
+    agent.endedAt = endedAt;
     
     // Capture subagent transcript path
     if (event.agentTranscriptPath) {
@@ -757,6 +800,44 @@ export class TraceStore {
       this.taskSpanToAgent.delete(`${runId}:${taskSpanId}`);
     }
     this.taskSpanMap.delete(`${runId}:${agentId}`);
+
+    // Close any still-running spans for this subagent (defensive cleanup).
+    // This prevents "stuck" spans when a subagent stops without emitting toolEnd.
+    const runSpans = this.spans.get(runId) || [];
+    const activeMap = this.activeSpans.get(runId);
+    const endStatus: SpanStatus = event.status === 'error' ? 'error' : 'ok';
+
+    const closeSpan = (span: Span) => {
+      if (span.status !== 'running' || typeof span.endedAt === 'number') return;
+      span.endedAt = endedAt;
+      span.status = endStatus;
+      span.durationMs = span.endedAt - span.startedAt;
+      if (event.status === 'error' && event.errorMessage && !span.errorMessage) {
+        span.errorMessage = event.errorMessage;
+      }
+      activeMap?.delete(span.spanId);
+      this.pendingSpans.delete(span.spanId);
+      this.appendToFile(runId, 'span', span);
+      this.broadcast({ type: 'spanEnd', runId, span });
+    };
+
+    // Close spans directly attributed to the subagent.
+    for (const span of runSpans) {
+      if (span.agentId === agentId) {
+        closeSpan(span);
+      }
+    }
+
+    // Also close the Task span that spawned this subagent, if still running.
+    if (taskSpanId) {
+      const taskSpan =
+        activeMap?.get(taskSpanId) ||
+        this.pendingSpans.get(taskSpanId) ||
+        [...runSpans].reverse().find(s => s.spanId === taskSpanId);
+      if (taskSpan) {
+        closeSpan(taskSpan);
+      }
+    }
     
     this.appendToFile(runId, 'agent', agent);
     this.broadcast({ type: 'agentEnd', runId, agent });
@@ -1057,12 +1138,25 @@ export class TraceStore {
     if (event.parentSpanId) {
       return this.taskSpanToAgent.get(`${runId}:${event.parentSpanId}`) || event.parentSpanId;
     }
+    // Cursor subagentStop doesn't include an explicit agent id.
+    // Fall back to the most recently active subagent for this run.
+    const state = this.activeSubagents.get(runId);
+    if (state && state.stack.length > 0) {
+      return state.stack[state.stack.length - 1];
+    }
     return undefined;
   }
 
   private resolveAgentIdForTool(event: TelemetryEvent, runId: string): string {
     if (event.agentId && event.agentId !== runId) {
       return event.agentId;
+    }
+
+    // Always attribute Task tool calls to the parent run.
+    // Without this, a running subagent can "steal" the parent's Task span,
+    // causing subagent lanes to incorrectly look like they only did "Task".
+    if (event.toolName === 'Task') {
+      return runId;
     }
 
     if (event.parentSpanId) {
@@ -1072,6 +1166,11 @@ export class TraceStore {
 
     const state = this.activeSubagents.get(runId);
     if (state && state.stack.length > 0) {
+      // Shell tool events don't carry agent IDs. Avoid misattribution by
+      // defaulting them to the main run unless the agent is explicit.
+      if (event.toolName === 'Shell' && !event.agentId) {
+        return runId;
+      }
       const agentId = state.stack[state.stack.length - 1];
       console.log(`[TraceStore] Attributing tool ${event.toolName} to active subagent: ${agentId.slice(0, 8)}`);
       return agentId;

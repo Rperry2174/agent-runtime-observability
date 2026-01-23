@@ -42,7 +42,12 @@ export interface UseTraceResult {
   refreshRuns: () => void;
 }
 
-export function useTrace(): UseTraceResult {
+export interface UseTraceOptions {
+  autoSelect?: boolean;
+}
+
+export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
+  const { autoSelect = true } = options;
   // Refs for high-frequency data (no re-renders)
   const currentRunRef = useRef<RunDetails | null>(null);
   const agentsRef = useRef<Map<string, Agent>>(new Map());
@@ -64,22 +69,30 @@ export function useTrace(): UseTraceResult {
   const pickBestDefaultRun = (runs: RunSummary[]): string | null => {
     if (runs.length === 0) return null;
 
-    const score = (r: RunSummary) => {
-      // Prefer the "main" run (UUID-ish) over per-task/subagent runs.
-      // Then prefer runs with actual activity (spans/agents), then recency.
-      const spanCount = r.spanCount ?? 0;
-      const agentCount = r.agentCount ?? 0;
+    // Sort by: running status first, then recency, then activity as tie-breaker
+    const sorted = [...runs].sort((a, b) => {
+      // 1. Running runs always come first
+      const aRunning = a.status === 'running' ? 1 : 0;
+      const bRunning = b.status === 'running' ? 1 : 0;
+      if (aRunning !== bRunning) return bRunning - aRunning;
 
-      let s = 0;
-      if (r.status === 'running') s += 10_000;
-      if (!isTaskCallRun(r.runId)) s += 5_000;
-      s += spanCount * 50;
-      s += agentCount * 200;
-      s += Math.floor((r.startedAt ?? 0) / 1000); // stable tie-breaker by recency
-      return s;
-    };
+      // 2. Prefer main runs over task-call subagent runs
+      const aMain = !isTaskCallRun(a.runId) ? 1 : 0;
+      const bMain = !isTaskCallRun(b.runId) ? 1 : 0;
+      if (aMain !== bMain) return bMain - aMain;
 
-    return [...runs].sort((a, b) => score(b) - score(a))[0].runId;
+      // 3. Most recent first (by startedAt timestamp)
+      const aTime = a.startedAt ?? 0;
+      const bTime = b.startedAt ?? 0;
+      if (aTime !== bTime) return bTime - aTime;
+
+      // 4. Tie-breaker: more activity
+      const aActivity = (a.spanCount ?? 0) + (a.agentCount ?? 0) * 2;
+      const bActivity = (b.spanCount ?? 0) + (b.agentCount ?? 0) * 2;
+      return bActivity - aActivity;
+    });
+
+    return sorted[0].runId;
   };
 
   // Fetch recent runs
@@ -90,14 +103,14 @@ export function useTrace(): UseTraceResult {
       setRecentRuns(runs);
       
       // Auto-select a "best" run (avoid task-call subagent runs by default)
-      if (!selectedRunId && runs.length > 0) {
+      if (autoSelect && !selectedRunId && runs.length > 0) {
         const best = pickBestDefaultRun(runs);
         setSelectedRunId(best || runs[0].runId);
       }
     } catch (err) {
       console.error('Failed to fetch runs:', err);
     }
-  }, [selectedRunId]);
+  }, [autoSelect, selectedRunId]);
   
   // Load spans for a specific run
   const loadRunData = useCallback(async (runId: string) => {
