@@ -60,13 +60,23 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
   const [recentRuns, setRecentRuns] = useState<RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   
+  // Refs for stable callbacks (avoid dependency cascade)
+  const selectedRunIdRef = useRef<string | null>(null);
+  const refreshRunsRef = useRef<() => void>(() => {});
+  
   // WebSocket ref
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number>();
+  const isCleaningUpRef = useRef(false);
+  
+  // Keep selectedRunIdRef in sync
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId;
+  }, [selectedRunId]);
   
   const isTaskCallRun = (runId: string) => runId.startsWith('task-call_');
 
-  const pickBestDefaultRun = (runs: RunSummary[]): string | null => {
+  const pickBestDefaultRun = useCallback((runs: RunSummary[]): string | null => {
     if (runs.length === 0) return null;
 
     // Sort by: running status first, then recency, then activity as tie-breaker
@@ -93,9 +103,9 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
     });
 
     return sorted[0].runId;
-  };
+  }, []);
 
-  // Fetch recent runs
+  // Fetch recent runs - stable callback
   const refreshRuns = useCallback(async () => {
     try {
       const res = await fetch(`${API_URL}/runs`);
@@ -103,14 +113,25 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
       setRecentRuns(runs);
       
       // Auto-select a "best" run (avoid task-call subagent runs by default)
-      if (autoSelect && !selectedRunId && runs.length > 0) {
-        const best = pickBestDefaultRun(runs);
-        setSelectedRunId(best || runs[0].runId);
-      }
+      // Use functional update to check current state without dependency
+      setSelectedRunId(current => {
+        if (autoSelect && !current && runs.length > 0) {
+          const best = pickBestDefaultRun(runs);
+          const selected = best || runs[0].runId;
+          console.log('[useTrace] Auto-selecting run:', selected, 'from', runs.length, 'runs');
+          return selected;
+        }
+        return current;
+      });
     } catch (err) {
       console.error('Failed to fetch runs:', err);
     }
-  }, [autoSelect, selectedRunId]);
+  }, [autoSelect, pickBestDefaultRun]);
+  
+  // Keep refreshRunsRef in sync
+  useEffect(() => {
+    refreshRunsRef.current = refreshRuns;
+  }, [refreshRuns]);
   
   // Load spans for a specific run
   const loadRunData = useCallback(async (runId: string) => {
@@ -126,11 +147,21 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
       if (!spansRes.ok) return;
       const spansData: SpanListResponse = await spansRes.json();
       
+      // Deduplicate spans by spanId (keep latest version based on startedAt)
+      const spanMap = new Map<string, Span>();
+      for (const span of spansData.spans) {
+        const existing = spanMap.get(span.spanId);
+        if (!existing || (span.endedAt && !existing.endedAt) || span.startedAt > existing.startedAt) {
+          spanMap.set(span.spanId, span);
+        }
+      }
+      const dedupedSpans = Array.from(spanMap.values());
+      
       // Update refs
       currentRunRef.current = details;
       agentsRef.current = new Map(details.agents.map(a => [a.agentId, a]));
-      spansRef.current = spansData.spans;
-      spanIndexRef.current = new Map(spansData.spans.map((span, idx) => [span.spanId, idx]));
+      spansRef.current = dedupedSpans;
+      spanIndexRef.current = new Map(dedupedSpans.map((span, idx) => [span.spanId, idx]));
       dataVersionRef.current++;
       
       // Subscribe to this run's updates
@@ -145,21 +176,24 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
   // Select a run
   const selectRun = useCallback((runId: string) => {
     // Unsubscribe from previous run
-    if (selectedRunId && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'unsubscribe', runId: selectedRunId }));
+    const prevRunId = selectedRunIdRef.current;
+    if (prevRunId && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'unsubscribe', runId: prevRunId }));
     }
     
     setSelectedRunId(runId);
     loadRunData(runId);
-  }, [selectedRunId, loadRunData]);
+  }, [loadRunData]);
   
-  // Handle WebSocket trace updates
+  // Handle WebSocket trace updates - uses refs to avoid recreating
   const handleTraceUpdate = useCallback((update: TraceUpdate) => {
+    const currentSelectedRunId = selectedRunIdRef.current;
+    
     // Only process updates for the selected run
-    if (update.runId !== selectedRunId) {
+    if (update.runId !== currentSelectedRunId) {
       // But refresh the runs list on new run events
       if (update.type === 'runStart' || update.type === 'runEnd') {
-        refreshRuns();
+        refreshRunsRef.current();
       }
       return;
     }
@@ -230,74 +264,86 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
         }
         break;
     }
-  }, [selectedRunId, refreshRuns]);
+  }, []); // No dependencies - uses refs for everything
   
-  // WebSocket connection
-  const connect = useCallback(() => {
-    setConnectionStatus('connecting');
-    
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    
-    ws.onopen = () => {
-      console.log('[WS] Connected');
-      setConnectionStatus('connected');
-      
-      // Subscribe to all updates initially
-      ws.send(JSON.stringify({ type: 'subscribeAll' }));
-      
-      // If we have a selected run, subscribe specifically
-      if (selectedRunId) {
-        ws.send(JSON.stringify({ type: 'subscribe', runId: selectedRunId }));
-      }
-    };
-    
-    ws.onclose = () => {
-      console.log('[WS] Disconnected');
-      setConnectionStatus('disconnected');
-      
-      // Reconnect after 2 seconds
-      reconnectTimeoutRef.current = window.setTimeout(connect, 2000);
-    };
-    
-    ws.onerror = (error) => {
-      console.error('[WS] Error:', error);
-      setConnectionStatus('disconnected');
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        
-        if (message.type === 'trace') {
-          handleTraceUpdate(message.data as TraceUpdate);
-        } else if (message.type === 'connected') {
-          console.log('[WS] Server confirmed connection');
-        }
-      } catch (err) {
-        console.error('[WS] Failed to parse message:', err);
-      }
-    };
-  }, [selectedRunId, handleTraceUpdate]);
-  
-  // Initialize
+  // WebSocket connection - completely stable, no dependencies
   useEffect(() => {
-    refreshRuns();
+    isCleaningUpRef.current = false;
+    
+    const connect = () => {
+      if (isCleaningUpRef.current) return;
+      
+      setConnectionStatus('connecting');
+      
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      
+      ws.onopen = () => {
+        console.log('[WS] Connected');
+        setConnectionStatus('connected');
+        
+        // Subscribe to all updates initially
+        ws.send(JSON.stringify({ type: 'subscribeAll' }));
+        
+        // If we have a selected run, subscribe specifically
+        const currentRunId = selectedRunIdRef.current;
+        if (currentRunId) {
+          ws.send(JSON.stringify({ type: 'subscribe', runId: currentRunId }));
+        }
+      };
+      
+      ws.onclose = () => {
+        if (!isCleaningUpRef.current) {
+          console.log('[WS] Disconnected');
+          setConnectionStatus('disconnected');
+          
+          // Reconnect after 2 seconds
+          reconnectTimeoutRef.current = window.setTimeout(connect, 2000);
+        }
+      };
+      
+      ws.onerror = (error) => {
+        if (!isCleaningUpRef.current) {
+          console.error('[WS] Error:', error);
+          setConnectionStatus('disconnected');
+        }
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          
+          if (message.type === 'trace') {
+            handleTraceUpdate(message.data as TraceUpdate);
+          } else if (message.type === 'connected') {
+            console.log('[WS] Server confirmed connection');
+          }
+        } catch (err) {
+          console.error('[WS] Failed to parse message:', err);
+        }
+      };
+    };
+    
     connect();
     
-    // Poll for new runs periodically
-    const pollInterval = setInterval(refreshRuns, 5000);
-    
     return () => {
-      clearInterval(pollInterval);
+      isCleaningUpRef.current = true;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
-  }, [connect, refreshRuns]);
+  }, [handleTraceUpdate]);
+  
+  // Poll for runs separately
+  useEffect(() => {
+    refreshRuns();
+    const pollInterval = setInterval(refreshRuns, 5000);
+    return () => clearInterval(pollInterval);
+  }, [refreshRuns]);
   
   // Load data when selected run changes
   useEffect(() => {

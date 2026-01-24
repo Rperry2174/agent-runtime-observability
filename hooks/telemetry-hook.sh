@@ -13,9 +13,10 @@ SERVER_URL="http://localhost:5174/api/telemetry"
 LOG_FILE="/tmp/observability-hook.log"
 DEBUG_LOG="/tmp/observability-hook-debug.log"
 SHELL_SPAN_FILE="/tmp/observability-shell-spans.log"
+SHELL_AGENT_FILE="/tmp/observability-shell-agent-map.log"
 
-# Enable debug mode with HOOK_DEBUG=1
-DEBUG_MODE="${HOOK_DEBUG:-0}"
+# Enable debug mode by default (set HOOK_DEBUG=0 to disable)
+DEBUG_MODE="${HOOK_DEBUG:-1}"
 
 # Read JSON from stdin
 INPUT=$(cat)
@@ -53,20 +54,88 @@ sanitize_shell_command() {
   printf '%s' "$1" | tr '\t\r\n' ' '
 }
 
+normalize_tool_name() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+record_shell_agent_map() {
+  local tool_name_raw="$1"
+  local tool_command_raw="$2"
+  local tool_agent_id="$3"
+  local tool_span_id="$4"
+
+  if [ -z "$tool_name_raw" ]; then
+    return
+  fi
+
+  local tool_name
+  tool_name=$(normalize_tool_name "$tool_name_raw")
+
+  case "$tool_name" in
+    shell|bash|command|terminal|run_terminal_cmd)
+      local tool_command
+      tool_command=$(sanitize_shell_command "$tool_command_raw")
+      if [ -n "$tool_command" ] && [ -n "$tool_agent_id" ]; then
+        printf '%s\t%s\t%s\t%s\t%s\n' "$RUN_ID" "$tool_command" "$tool_agent_id" "$tool_span_id" "$(date +%s)" >> "$SHELL_AGENT_FILE"
+      fi
+      ;;
+  esac
+}
+
+extract_shell_agent_from_map() {
+  local map_file="$1"
+  local run_id="$2"
+  local shell_command="$3"
+  local match_line
+
+  if [ ! -f "$map_file" ]; then
+    return
+  fi
+
+  match_line=$(awk -v r="$run_id" -v c="$shell_command" 'BEGIN{FS="\t"} $1==r && $2==c {line=$0} END{print line}' "$map_file")
+  if [ -z "$match_line" ]; then
+    return
+  fi
+
+  SHELL_AGENT_ID=$(printf '%s' "$match_line" | awk -F'\t' '{print $3}')
+  SHELL_PARENT_SPAN_ID=$(printf '%s' "$match_line" | awk -F'\t' '{print $4}')
+
+  awk -v r="$run_id" -v c="$shell_command" 'BEGIN{FS=OFS="\t"} {if($1==r && $2==c && !done){done=1; next} print}' "$map_file" > "${map_file}.tmp" \
+    && mv "${map_file}.tmp" "$map_file"
+}
+
 SHELL_COMMAND=""
 SHELL_SPAN_ID=""
+SHELL_AGENT_ID=""
+SHELL_PARENT_SPAN_ID=""
+
+if [ "$EVENT_KIND" = "toolStart" ]; then
+  TOOL_NAME_RAW=$(echo "$INPUT" | /usr/bin/jq -r '.tool_name // empty' 2>/dev/null)
+  TOOL_COMMAND_RAW=$(echo "$INPUT" | /usr/bin/jq -r '.tool_input.command // .tool_input.cmd // .command // empty' 2>/dev/null)
+  TOOL_AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.agent_id // .agentId // .subagent_id // .task_agent_id // empty' 2>/dev/null)
+  TOOL_SPAN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.tool_use_id // empty' 2>/dev/null)
+  record_shell_agent_map "$TOOL_NAME_RAW" "$TOOL_COMMAND_RAW" "$TOOL_AGENT_ID" "$TOOL_SPAN_ID"
+fi
+
 if [ "$EVENT_KIND" = "shellStart" ] || [ "$EVENT_KIND" = "shellEnd" ]; then
   RAW_COMMAND=$(echo "$INPUT" | /usr/bin/jq -r '.command // empty' 2>/dev/null)
   SHELL_COMMAND=$(sanitize_shell_command "$RAW_COMMAND")
+  extract_shell_agent_from_map "$SHELL_AGENT_FILE" "$RUN_ID" "$SHELL_COMMAND"
+  if [ -z "$SHELL_AGENT_ID" ]; then
+    SHELL_AGENT_ID=$(echo "$INPUT" | /usr/bin/jq -r '.agent_id // .agentId // .subagent_id // .task_agent_id // empty' 2>/dev/null)
+  fi
 
   if [ "$EVENT_KIND" = "shellStart" ]; then
     SHELL_SPAN_ID=$(generate_shell_span_id)
-    printf '%s\t%s\t%s\n' "$RUN_ID" "$SHELL_COMMAND" "$SHELL_SPAN_ID" >> "$SHELL_SPAN_FILE"
+    printf '%s\t%s\t%s\t%s\n' "$RUN_ID" "$SHELL_COMMAND" "$SHELL_SPAN_ID" "$SHELL_AGENT_ID" >> "$SHELL_SPAN_FILE"
   else
     if [ -f "$SHELL_SPAN_FILE" ]; then
       MATCH_LINE=$(awk -v r="$RUN_ID" -v c="$SHELL_COMMAND" 'BEGIN{FS="\t"} $1==r && $2==c {print $0; exit}' "$SHELL_SPAN_FILE")
       if [ -n "$MATCH_LINE" ]; then
         SHELL_SPAN_ID=$(printf '%s' "$MATCH_LINE" | awk -F'\t' '{print $3}')
+        if [ -z "$SHELL_AGENT_ID" ]; then
+          SHELL_AGENT_ID=$(printf '%s' "$MATCH_LINE" | awk -F'\t' '{print $4}')
+        fi
         awk -v r="$RUN_ID" -v c="$SHELL_COMMAND" 'BEGIN{FS=OFS="\t"} {if($1==r && $2==c && !done){done=1; next} print}' "$SHELL_SPAN_FILE" > "${SHELL_SPAN_FILE}.tmp" \
           && mv "${SHELL_SPAN_FILE}.tmp" "$SHELL_SPAN_FILE"
       fi
@@ -81,6 +150,7 @@ PAYLOAD=$(
     --arg eventKind "$EVENT_KIND" \
     --argjson timestamp "$(date +%s000)" \
     --arg shellSpanId "$SHELL_SPAN_ID" \
+    --arg shellAgentId "$SHELL_AGENT_ID" \
     --arg shellCommand "$SHELL_COMMAND" \
     '
       def trunc($n):
@@ -96,7 +166,7 @@ PAYLOAD=$(
         source: (if .conversation_id then "cursor" elif .session_id then "claude" else null end),
 
         spanId: (if ($eventKind == "shellStart" or $eventKind == "shellEnd") and $shellSpanId != "" then $shellSpanId else (.tool_use_id // null) end),
-        agentId: (.agent_id // .agentId // .subagent_id // .task_agent_id // null),
+        agentId: (if ($eventKind == "shellStart" or $eventKind == "shellEnd") and $shellAgentId != "" then $shellAgentId else (.agent_id // .agentId // .subagent_id // .task_agent_id // null) end),
         parentAgentId: (.parent_agent_id // .parentAgentId // null),
         parentSpanId: (.parent_span_id // .parentSpanId // .task_span_id // null),
 

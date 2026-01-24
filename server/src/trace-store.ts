@@ -1006,7 +1006,18 @@ export class TraceStore {
   getRecentRuns(limit: number = 20): RunSummary[] {
     const summaries: RunSummary[] = [];
     
+    // Filter out task-call runs (subagent runs that should be part of parent runs)
+    const isTaskCallRun = (runId: string) => 
+      runId.startsWith('task-call_') || 
+      runId.startsWith('task-toolu_') ||
+      runId.startsWith('task-');
+    
     for (const runId of this.runs.keys()) {
+      // Skip task-call runs - these are subagents that should be part of parent runs
+      if (isTaskCallRun(runId)) {
+        continue;
+      }
+      
       const summary = this.getRunSummary(runId);
       if (summary) {
         summaries.push(summary);
@@ -1166,11 +1177,6 @@ export class TraceStore {
 
     const state = this.activeSubagents.get(runId);
     if (state && state.stack.length > 0) {
-      // Shell tool events don't carry agent IDs. Avoid misattribution by
-      // defaulting them to the main run unless the agent is explicit.
-      if (event.toolName === 'Shell' && !event.agentId) {
-        return runId;
-      }
       const agentId = state.stack[state.stack.length - 1];
       console.log(`[TraceStore] Attributing tool ${event.toolName} to active subagent: ${agentId.slice(0, 8)}`);
       return agentId;

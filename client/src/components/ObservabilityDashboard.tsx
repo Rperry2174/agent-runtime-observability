@@ -700,7 +700,17 @@ function buildSpanLanes(spans: DisplaySpan[], now: number): {
   spanLayouts: Array<{ span: DisplaySpan; lane: number }>;
   laneCount: number;
 } {
-  const sorted = [...spans].sort((a, b) => a.startedAt - b.startedAt);
+  // Deduplicate spans by spanId - keep the most recent version
+  const spanMap = new Map<string, DisplaySpan>();
+  spans.forEach(span => {
+    const existing = spanMap.get(span.spanId);
+    if (!existing || span.startedAt > existing.startedAt) {
+      spanMap.set(span.spanId, span);
+    }
+  });
+  
+  const dedupedSpans = Array.from(spanMap.values());
+  const sorted = [...dedupedSpans].sort((a, b) => a.startedAt - b.startedAt);
   const laneEnds: number[] = [];
   const spanLayouts: Array<{ span: DisplaySpan; lane: number }> = [];
 
