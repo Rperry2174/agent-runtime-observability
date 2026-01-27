@@ -8,7 +8,7 @@
 // Core Data Model
 // ============================================================================
 
-export type AgentSource = 'cursor' | 'claude' | 'demo' | 'unknown';
+export type AgentSource = 'cursor' | 'demo' | 'unknown';
 export type SpanStatus = 'running' | 'ok' | 'error' | 'timeout' | 'permission_denied' | 'aborted';
 export type RunStatus = 'running' | 'completed' | 'aborted' | 'error';
 

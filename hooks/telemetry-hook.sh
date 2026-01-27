@@ -1,7 +1,7 @@
 #!/bin/bash
-# Universal Telemetry Hook for Agent Observability
+# Telemetry Hook for Agent Observability
 #
-# Works with Cursor and Claude Code hooks.
+# Works with Cursor hooks.
 # Extracts relevant fields and sends normalized events to the observability server.
 #
 # Usage: ./telemetry-hook.sh <eventKind>
@@ -34,8 +34,8 @@ if [ "$DEBUG_MODE" = "1" ]; then
     echo "" >> "$DEBUG_LOG"
 fi
 
-# Extract run ID (Cursor: conversation_id, Claude: session_id)
-RUN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.conversation_id // .session_id // empty' 2>/dev/null)
+# Extract run ID (Cursor: conversation_id)
+RUN_ID=$(echo "$INPUT" | /usr/bin/jq -r '.conversation_id // empty' 2>/dev/null)
 
 if [ -z "$RUN_ID" ]; then
     echo "$(date): [$EVENT_KIND] SKIP - no run ID" >> "$LOG_FILE"
@@ -162,8 +162,8 @@ PAYLOAD=$(
       {
         eventKind: $eventKind,
         timestamp: $timestamp,
-        runId: (.conversation_id // .session_id // null),
-        source: (if .conversation_id then "cursor" elif .session_id then "claude" else null end),
+        runId: (.conversation_id // null),
+        source: (if .conversation_id then "cursor" else null end),
 
         spanId: (if ($eventKind == "shellStart" or $eventKind == "shellEnd") and $shellSpanId != "" then $shellSpanId else (.tool_use_id // null) end),
         agentId: (if ($eventKind == "shellStart" or $eventKind == "shellEnd") and $shellAgentId != "" then $shellAgentId else (.agent_id // .agentId // .subagent_id // .task_agent_id // null) end),

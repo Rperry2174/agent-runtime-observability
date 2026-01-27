@@ -1,6 +1,6 @@
 # Agent Observability
 
-Real-time tracing dashboard for Cursor and Claude Code agents. Shows tool call timelines, durations, errors, and subagent workflows.
+Real-time tracing dashboard for Cursor agents. Shows tool call timelines, durations, errors, and subagent workflows.
 
 ## Agent Quick Start
 
@@ -32,7 +32,7 @@ Run tests: `cd server && npm test` and `cd client && npm test`
 │ DATA FLOW                                                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│ Cursor / Claude Code                                            │
+│ Cursor                                                          │
 │         │                                                       │
 │         ▼                                                       │
 │ ┌─────────────────┐                                             │
@@ -64,7 +64,7 @@ agent-runtime-observability/
 ├── bin/
 │   └── setup.js            # Universal setup script for any project
 ├── hooks/
-│   └── telemetry-hook.sh   # Captures events from Cursor/Claude hooks
+│   └── telemetry-hook.sh   # Captures events from Cursor hooks
 ├── server/
 │   └── src/
 │       ├── index.ts        # Express server + API endpoints
@@ -118,7 +118,7 @@ type TelemetryEventKind =
 interface TelemetryEvent {
   eventKind: TelemetryEventKind;
   timestamp: number;
-  runId?: string;      // conversation_id (Cursor) or session_id (Claude)
+  runId?: string;      // conversation_id (Cursor)
   agentId?: string;    // For subagents
   spanId?: string;     // tool_use_id when available
   toolName?: string;
@@ -234,11 +234,9 @@ curl http://localhost:5174/api/health | jq
 
 ## Setup for Other Projects
 
-To observe agent sessions in another project, manually create hook configs pointing to this repo's telemetry script.
+To observe agent sessions in another project, create hook configs pointing to this repo's telemetry script.
 
 **Cursor**: Create `<project>/.cursor/hooks.json` with hooks calling `/path/to/agent-runtime-observability/hooks/telemetry-hook.sh <eventKind>`.
-
-**Claude Code**: Create `<project>/.claude/settings.local.json` with hooks calling the same script.
 
 See `README.md` for full example configs.
 
@@ -252,7 +250,7 @@ See `README.md` for full example configs.
 
 4. **Ref-based client state**: Avoids React re-render storms during high-frequency updates.
 
-5. **Span correlation by tool_use_id**: Cursor provides this; Claude falls back to (agentId, toolName).
+5. **Span correlation by tool_use_id**: Cursor provides this for reliable span matching.
 
 6. **WebSocket subscriptions**: Clients can subscribe to specific runs or all runs.
 

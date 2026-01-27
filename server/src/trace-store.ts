@@ -1187,7 +1187,6 @@ export class TraceStore {
 
   private getAgentDisplayName(source: AgentSource | undefined, num: number, agentType?: string): string {
     const sourceName = source === 'cursor' ? 'Cursor' :
-                       source === 'claude' ? 'Claude' :
                        source === 'demo' ? 'Demo' : 'Agent';
     
     if (agentType) {

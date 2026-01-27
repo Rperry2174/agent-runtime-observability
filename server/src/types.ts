@@ -2,7 +2,7 @@
  * Agent Observability Types
  * 
  * Normalized telemetry model for real-time agent tracing.
- * Supports Cursor and Claude Code hooks.
+ * Supports Cursor hooks.
  */
 
 // ============================================================================
@@ -10,7 +10,7 @@
 // ============================================================================
 
 /** Source of telemetry events */
-export type AgentSource = 'cursor' | 'claude' | 'demo' | 'unknown';
+export type AgentSource = 'cursor' | 'demo' | 'unknown';
 
 /** Span execution status */
 export type SpanStatus = 'running' | 'ok' | 'error' | 'timeout' | 'permission_denied' | 'aborted';
@@ -20,7 +20,7 @@ export type RunStatus = 'running' | 'completed' | 'aborted' | 'error';
 
 /**
  * A Run represents a single agent session (conversation).
- * Maps to Cursor's conversation_id or Claude's session_id.
+ * Maps to Cursor's conversation_id.
  */
 export interface Run {
   runId: string;
@@ -116,14 +116,14 @@ export type TelemetryEventKind =
 
 /**
  * Raw telemetry event from hooks.
- * The hook script wraps the raw Cursor/Claude JSON with an eventKind.
+ * The hook script wraps the raw Cursor JSON with an eventKind.
  */
 export interface TelemetryEvent {
   eventKind: TelemetryEventKind;
   timestamp: number;
   
   // Identifiers (at least one required)
-  runId?: string;  // conversation_id (Cursor) or session_id (Claude)
+  runId?: string;  // conversation_id (Cursor)
   agentId?: string;  // For subagents
   spanId?: string;  // tool_use_id when available
   

@@ -1,8 +1,8 @@
 /**
  * Agent Observability Server
- * 
+ *
  * Telemetry-first server for real-time agent tracing.
- * Receives events from Cursor/Claude hooks and broadcasts to dashboard.
+ * Receives events from Cursor hooks and broadcasts to dashboard.
  */
 
 import express from 'express';
@@ -182,8 +182,8 @@ function normalizeEvent(body: Record<string, unknown>): TelemetryEvent {
     timestamp: (body.timestamp as number) || Date.now(),
   };
   
-  // Run ID: Cursor uses conversation_id, Claude uses session_id
-  event.runId = (body.runId || body.conversation_id || body.session_id) as string;
+  // Run ID: Cursor uses conversation_id
+  event.runId = (body.runId || body.conversation_id) as string;
   
   // Agent ID for subagents - check multiple possible field names
   event.agentId = (body.agentId || body.agent_id || body.subagent_id || body.task_agent_id) as string;
@@ -222,8 +222,6 @@ function normalizeEvent(body: Record<string, unknown>): TelemetryEvent {
     event.source = body.source as AgentSource;
   } else if (body.conversation_id) {
     event.source = 'cursor';
-  } else if (body.session_id) {
-    event.source = 'claude';
   }
   
   // Duration

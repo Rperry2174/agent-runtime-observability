@@ -1,7 +1,7 @@
 {
   "name": "agent-runtime-observability",
   "version": "2.0.0",
-  "description": "Real-time observability dashboard for AI coding agents (Cursor, Claude Code)",
+  "description": "Real-time observability dashboard for Cursor AI agents",
   "type": "module",
   "private": true,
   "workspaces": ["server", "client"],
@@ -12,7 +12,7 @@
     "build": "npm run build --workspace=server && npm run build --workspace=client",
     "test": "npm test --workspaces"
   },
-  "keywords": ["observability", "tracing", "cursor", "claude-code", "agents"],
+  "keywords": ["observability", "tracing", "cursor", "agents"],
   "author": "",
   "license": "MIT",
   "devDependencies": {

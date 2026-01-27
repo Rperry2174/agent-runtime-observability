@@ -64,7 +64,6 @@ export function ObservabilityDashboard() {
 
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
   const [, forceUpdate] = useState(0);
-  const [demoLoading, setDemoLoading] = useState(false);
   const compactMode = true;
 
   const [transcriptOpen, setTranscriptOpen] = useState(false);
@@ -184,24 +183,6 @@ export function ObservabilityDashboard() {
     }
   };
 
-  // Start demo
-  const startDemo = async () => {
-    setDemoLoading(true);
-    try {
-      const res = await fetch('http://localhost:5174/api/demo/start', { method: 'POST' });
-      const data = await res.json();
-      if (data.runId) {
-        setTimeout(() => {
-          refreshRuns();
-          handleSelectRun(data.runId);
-        }, 500);
-      }
-    } catch (err) {
-      console.error('Failed to start demo:', err);
-    }
-    setDemoLoading(false);
-  };
-
   // Find parent agent for subagents
   const getParentAgent = (agent: Agent) => {
     if (!agent.parentAgentId) return null;
@@ -264,9 +245,7 @@ export function ObservabilityDashboard() {
       <header style={styles.header}>
         <div style={styles.headerLeft}>
           <div style={styles.logo}>⚡</div>
-          <span style={styles.logoText}>CodeMap</span>
-          <span style={styles.headerDivider}>/</span>
-          <span style={styles.headerTitle}>Observability</span>
+          <span style={styles.logoText}>Agent Observability</span>
         </div>
         <div style={styles.headerRight}>
           {/* Run selector */}
@@ -278,18 +257,11 @@ export function ObservabilityDashboard() {
             >
               {recentRuns.map(r => (
                 <option key={r.runId} value={r.runId}>
-                  {r.source === 'demo' ? '🎬 Demo' : '🔴 Live'} - {new Date(r.startedAt).toLocaleTimeString()} ({r.spanCount} spans)
+                  🔴 Live - {new Date(r.startedAt).toLocaleTimeString()} ({r.spanCount} spans)
                 </option>
               ))}
             </select>
           )}
-          <button 
-            style={styles.demoButton}
-            onClick={startDemo}
-            disabled={demoLoading}
-          >
-            {demoLoading ? '...' : '▷ Run Demo'}
-          </button>
         </div>
       </header>
 
@@ -314,7 +286,7 @@ export function ObservabilityDashboard() {
                 <span style={styles.metaDot}>•</span>
                 <span>{new Date(runSummary.startedAt).toLocaleString()}</span>
                 <span style={styles.metaDot}>•</span>
-                <span>via {runSummary.source === 'demo' ? 'Demo' : runSummary.source === 'cursor' ? 'Cursor' : 'Claude'}</span>
+                <span>via {runSummary.source === 'demo' ? 'Demo' : 'Cursor'}</span>
                 {run?.transcriptPath && (
                   <>
                     <span style={styles.metaDot}>•</span>
@@ -634,21 +606,23 @@ export function ObservabilityDashboard() {
             </div>
           </>
         ) : (
-          /* Empty State */
+          /* Empty State with Setup Instructions */
           <div style={styles.emptyState}>
             <div style={styles.emptyStateIcon}>⚡</div>
             <h2 style={styles.emptyStateTitle}>No runs yet</h2>
             <p style={styles.emptyStateText}>
-              Start a Cursor or Claude Code session with hooks configured,<br />
-              or run a demo to see the dashboard in action.
+              To start observing agent sessions, run this from the project you want to monitor:
             </p>
-            <button 
-              style={styles.demoBigButton}
-              onClick={startDemo}
-              disabled={demoLoading}
-            >
-              {demoLoading ? 'Starting...' : '▷ Run Demo'}
-            </button>
+            <div style={styles.setupCommand}>
+              <code style={styles.commandText}>
+                node &lt;path-to-agent-observability&gt;/bin/setup.js setup
+              </code>
+            </div>
+            <p style={styles.emptyStateSubtext}>
+              Replace <code style={styles.inlineCode}>&lt;path-to-agent-observability&gt;</code> with the path to this repo.<br />
+              This will configure Cursor hooks in your project.<br />
+              Then start an agent session and activity will appear here.
+            </p>
           </div>
         )}
       </main>
@@ -1031,19 +1005,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     cursor: 'pointer',
     minWidth: '200px',
-  },
-  demoButton: {
-    padding: '10px 20px',
-    backgroundColor: 'transparent',
-    border: '1px solid #334155',
-    borderRadius: '8px',
-    color: '#e2e8f0',
-    fontSize: '14px',
-    fontWeight: 500,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
   },
   
   // Main
@@ -1435,16 +1396,34 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '16px',
     color: '#64748b',
     lineHeight: 1.6,
-    marginBottom: '32px',
+    marginBottom: '24px',
   },
-  demoBigButton: {
-    padding: '14px 32px',
-    backgroundColor: '#7c3aed',
-    border: 'none',
-    borderRadius: '10px',
-    color: '#fff',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
+  emptyStateSubtext: {
+    fontSize: '14px',
+    color: '#475569',
+    lineHeight: 1.6,
+    marginTop: '24px',
+  },
+  setupCommand: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '16px 20px',
+    backgroundColor: '#1e293b',
+    borderRadius: '12px',
+    border: '1px solid #334155',
+  },
+  commandText: {
+    fontSize: '14px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    color: '#e2e8f0',
+    wordBreak: 'break-all',
+  },
+  inlineCode: {
+    backgroundColor: '#334155',
+    padding: '2px 6px',
+    borderRadius: '4px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+    fontSize: '13px',
   },
 };

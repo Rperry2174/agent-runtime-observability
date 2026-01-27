@@ -1,6 +1,6 @@
 # Agent Observability
 
-Real-time tracing and visualization for AI coding agents (Cursor, Claude Code).
+Real-time tracing and visualization for Cursor AI agents.
 
 See what your agents are doing: tool calls, durations, errors, subagent workflows — all in a timeline UI.
 
@@ -54,20 +54,6 @@ Create/edit `<your-project>/.cursor/hooks.json`:
 
 Replace `/path/to/agent-runtime-observability` with the actual path to this repo (e.g. `/Users/you/Desktop/projects/agent-runtime-observability`).
 
-### Claude Code
-
-Create/edit `<your-project>/.claude/settings.local.json`:
-
-```json
-{
-  "hooks": {
-    "PreToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolStart" }] }],
-    "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolEnd" }] }],
-    "Stop": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh stop" }] }]
-  }
-}
-```
-
 ### Gitignore
 
 Add `.agent-runtime-observability/` to your project's `.gitignore` — that's where trace files are stored.
@@ -85,9 +71,9 @@ Add `.agent-runtime-observability/` to your project's `.gitignore` — that's wh
 ## Architecture
 
 ```
-Cursor/Claude Hooks → Telemetry API → TraceStore → WebSocket → Dashboard
-                                         ↓
-                                     JSONL Logs
+Cursor Hooks → Telemetry API → TraceStore → WebSocket → Dashboard
+                                   ↓
+                               JSONL Logs
 ```
 
 ### Server (Port 5174)
@@ -125,22 +111,17 @@ cd client && npm run dev
 
 ## Hooks Reference
 
-The telemetry hook script (`hooks/telemetry-hook.sh`) handles all events:
+The telemetry hook script (`hooks/telemetry-hook.sh`) handles all Cursor events:
 
-**Cursor hooks:**
 - `sessionStart/sessionEnd` — Run lifecycle
 - `preToolUse/postToolUse/postToolUseFailure` — Tool spans
 - `subagentStart/subagentStop` — Subagent lifecycle
 - `stop` — Completion status
 - `beforeReadFile/beforeSubmitPrompt` — Attachments visibility
 
-**Claude Code hooks:**
-- `PreToolUse/PostToolUse` — Tool spans
-- `Stop` — Completion status
-
 ## Data Model
 
-- **Run**: A single agent session (maps to `conversation_id` or `session_id`)
+- **Run**: A single agent session (maps to Cursor's `conversation_id`)
 - **Agent**: An agent within a run (main agent + subagents)
 - **Span**: A single tool execution with start/end times, status, and metadata
 

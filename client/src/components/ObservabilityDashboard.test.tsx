@@ -55,10 +55,9 @@ describe('ObservabilityDashboard', () => {
     );
   };
 
-  it('should render the header with CodeMap branding', () => {
+  it('should render the header with branding', () => {
     renderDashboard();
-    expect(screen.getByText('CodeMap')).toBeDefined();
-    expect(screen.getByText('Observability')).toBeDefined();
+    expect(screen.getByText('Agent Observability')).toBeDefined();
   });
 
   it('should show empty state when no runs', () => {
@@ -66,11 +65,9 @@ describe('ObservabilityDashboard', () => {
     expect(screen.getByText('No runs yet')).toBeDefined();
   });
 
-  it('should have a Run Demo button', () => {
+  it('should show setup instructions in empty state', () => {
     renderDashboard();
-    // There are two demo buttons - one in header, one in empty state
-    const demoButtons = screen.getAllByText(/Run Demo/);
-    expect(demoButtons.length).toBeGreaterThan(0);
+    expect(screen.getByText(/setup.js setup/)).toBeDefined();
   });
 });
 

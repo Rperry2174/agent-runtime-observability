@@ -2,7 +2,7 @@
 /**
  * Agent Observability Setup Script
  *
- * Configures Cursor and Claude Code hooks for telemetry collection.
+ * Configures Cursor hooks for telemetry collection.
  * Run from a project directory: node /path/to/agent-runtime-observability/bin/setup.js setup
  */
 
@@ -69,46 +69,6 @@ const cursorHooksConfig = {
   }
 };
 
-// ============================================================================
-// Claude Code Configuration
-// ============================================================================
-
-const claudeHooksConfig = {
-  hooks: {
-    PreToolUse: [
-      {
-        matcher: ".*",
-        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolStart` }]
-      }
-    ],
-    PostToolUse: [
-      {
-        matcher: ".*",
-        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolEnd` }]
-      }
-    ],
-    Stop: [
-      {
-        matcher: ".*",
-        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} stop` }]
-      }
-    ],
-    Notification: [
-      {
-        matcher: ".*",
-        hooks: [{ type: "command", command: `${TELEMETRY_HOOK} toolStart` }]
-      }
-    ]
-  }
-};
-
-const claudePermissionsConfig = {
-  permissions: {
-    allow: [
-      `Bash(${TELEMETRY_HOOK}:*)`
-    ]
-  }
-};
 
 // ============================================================================
 // Utilities
@@ -159,39 +119,6 @@ function setupCursorHooks() {
   console.log('  Configured .cursor/hooks.json (Cursor)');
 }
 
-function setupClaudeHooks() {
-  const claudeDir = path.join(TARGET_DIR, '.claude');
-  if (!fs.existsSync(claudeDir)) {
-    fs.mkdirSync(claudeDir, { recursive: true });
-  }
-
-  const settingsPath = path.join(claudeDir, 'settings.local.json');
-  let settings = {};
-
-  if (fs.existsSync(settingsPath)) {
-    try {
-      settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-    } catch {
-      // Start fresh on parse error
-    }
-  }
-
-  // Merge hooks
-  settings.hooks = claudeHooksConfig.hooks;
-
-  // Merge permissions
-  if (!settings.permissions) settings.permissions = {};
-  if (!settings.permissions.allow) settings.permissions.allow = [];
-
-  // Remove old hook permissions
-  settings.permissions.allow = settings.permissions.allow.filter(
-    p => !p.includes('telemetry-hook') && !p.includes('file-activity-hook') && !p.includes('thinking-hook')
-  );
-  settings.permissions.allow.push(...claudePermissionsConfig.permissions.allow);
-
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-  console.log('  Configured .claude/settings.local.json (Claude Code)');
-}
 
 function setupGitignore() {
   const gitignorePath = path.join(TARGET_DIR, '.gitignore');
@@ -221,7 +148,6 @@ function setupAll() {
   console.log('\nConfiguring hooks...');
   
   setupCursorHooks();
-  setupClaudeHooks();
   setupGitignore();
   makeHookExecutable();
   
