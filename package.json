@@ -1,5 +1,5 @@
 {
-  "name": "codemap",
+  "name": "agent-runtime-observability",
   "version": "2.0.0",
   "description": "Real-time observability dashboard for AI coding agents (Cursor, Claude Code)",
   "type": "module",

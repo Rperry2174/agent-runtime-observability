@@ -525,7 +525,7 @@ describe('TraceStore', () => {
         toolName: 'Read',
       });
 
-      const filePath = path.join(tempDir, '.codemap', 'traces', 'persist-test.jsonl');
+      const filePath = path.join(tempDir, '.agent-runtime-observability', 'traces', 'persist-test.jsonl');
       expect(fs.existsSync(filePath)).toBe(true);
 
       const content = fs.readFileSync(filePath, 'utf-8');

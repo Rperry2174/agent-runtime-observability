@@ -8,8 +8,8 @@ See what your agents are doing: tool calls, durations, errors, subagent workflow
 
 ```bash
 # Clone and install
-git clone https://github.com/JamsusMaximus/codemap
-cd codemap
+git clone https://github.com/your-org/agent-runtime-observability
+cd agent-runtime-observability
 npm install
 
 # Start the observability server + dashboard
@@ -31,28 +31,28 @@ Create/edit `<your-project>/.cursor/hooks.json`:
 {
   "version": 1,
   "hooks": {
-    "sessionStart": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh sessionStart" }],
-    "sessionEnd": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh sessionEnd" }],
-    "preToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolStart" }],
-    "postToolUse": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolEnd" }],
-    "postToolUseFailure": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh toolFailure" }],
-    "beforeShellExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh shellStart" }],
-    "afterShellExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh shellEnd" }],
-    "afterMCPExecution": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh mcpEnd" }],
-    "afterFileEdit": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh fileEditEnd" }],
-    "beforeTabFileRead": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh tabReadStart" }],
-    "afterTabFileEdit": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh tabEditEnd" }],
-    "subagentStart": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStart" }],
-    "subagentStop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh subagentStop" }],
-    "afterAgentThought": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh thinkingEnd" }],
-    "beforeSubmitPrompt": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh beforeSubmitPrompt" }],
-    "preCompact": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh contextCompact" }],
-    "stop": [{ "command": "/path/to/codemap/hooks/telemetry-hook.sh stop" }]
+    "sessionStart": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh sessionStart" }],
+    "sessionEnd": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh sessionEnd" }],
+    "preToolUse": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolStart" }],
+    "postToolUse": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolEnd" }],
+    "postToolUseFailure": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolFailure" }],
+    "beforeShellExecution": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh shellStart" }],
+    "afterShellExecution": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh shellEnd" }],
+    "afterMCPExecution": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh mcpEnd" }],
+    "afterFileEdit": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh fileEditEnd" }],
+    "beforeTabFileRead": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh tabReadStart" }],
+    "afterTabFileEdit": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh tabEditEnd" }],
+    "subagentStart": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh subagentStart" }],
+    "subagentStop": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh subagentStop" }],
+    "afterAgentThought": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh thinkingEnd" }],
+    "beforeSubmitPrompt": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh beforeSubmitPrompt" }],
+    "preCompact": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh contextCompact" }],
+    "stop": [{ "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh stop" }]
   }
 }
 ```
 
-Replace `/path/to/codemap` with the actual path to this repo (e.g. `/Users/you/Desktop/projects/codemap`).
+Replace `/path/to/agent-runtime-observability` with the actual path to this repo (e.g. `/Users/you/Desktop/projects/agent-runtime-observability`).
 
 ### Claude Code
 
@@ -61,16 +61,16 @@ Create/edit `<your-project>/.claude/settings.local.json`:
 ```json
 {
   "hooks": {
-    "PreToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh toolStart" }] }],
-    "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh toolEnd" }] }],
-    "Stop": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/codemap/hooks/telemetry-hook.sh stop" }] }]
+    "PreToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolStart" }] }],
+    "PostToolUse": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh toolEnd" }] }],
+    "Stop": [{ "matcher": ".*", "hooks": [{ "type": "command", "command": "/path/to/agent-runtime-observability/hooks/telemetry-hook.sh stop" }] }]
   }
 }
 ```
 
 ### Gitignore
 
-Add `.codemap/` to your project's `.gitignore` — that's where trace files are stored.
+Add `.agent-runtime-observability/` to your project's `.gitignore` — that's where trace files are stored.
 
 ## Features
 
@@ -144,7 +144,7 @@ The telemetry hook script (`hooks/telemetry-hook.sh`) handles all events:
 - **Agent**: An agent within a run (main agent + subagents)
 - **Span**: A single tool execution with start/end times, status, and metadata
 
-Traces are persisted to `.codemap/traces/<runId>.jsonl` for replay and debugging.
+Traces are persisted to `.agent-runtime-observability/traces/<runId>.jsonl` for replay and debugging.
 
 ## Troubleshooting
 

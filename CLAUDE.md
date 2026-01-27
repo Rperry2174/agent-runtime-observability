@@ -60,7 +60,7 @@ Run tests: `cd server && npm test` and `cd client && npm test`
 ## Directory Structure
 
 ```
-codemap/
+agent-runtime-observability/
 ├── bin/
 │   └── setup.js            # Universal setup script for any project
 ├── hooks/
@@ -236,7 +236,7 @@ curl http://localhost:5174/api/health | jq
 
 To observe agent sessions in another project, manually create hook configs pointing to this repo's telemetry script.
 
-**Cursor**: Create `<project>/.cursor/hooks.json` with hooks calling `/path/to/codemap/hooks/telemetry-hook.sh <eventKind>`.
+**Cursor**: Create `<project>/.cursor/hooks.json` with hooks calling `/path/to/agent-runtime-observability/hooks/telemetry-hook.sh <eventKind>`.
 
 **Claude Code**: Create `<project>/.claude/settings.local.json` with hooks calling the same script.
 
@@ -260,7 +260,7 @@ See `README.md` for full example configs.
 
 ## Trace File Format
 
-Traces are stored in `.codemap/traces/<runId>.jsonl`:
+Traces are stored in `.agent-runtime-observability/traces/<runId>.jsonl`:
 
 ```jsonl
 {"type":"run","data":{"runId":"...","status":"running",...},"ts":1234567890}

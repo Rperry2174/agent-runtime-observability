@@ -39,7 +39,8 @@ npm-debug.log*
 .playwright-mcp/
 
 # Agent observability traces
-.codemap/
+.agent-runtime-observability/
 
 # Lock files (optional - uncomment if you want to track them)
 # package-lock.json
+.agent-runtime-observability-state.json

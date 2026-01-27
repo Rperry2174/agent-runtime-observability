@@ -57,7 +57,7 @@ traceStore.setDebugTelemetry(debugTelemetry);
 const recentRawEvents: Array<{ ts: number; raw: unknown; normalized: TelemetryEvent }> = [];
 const MAX_DEBUG_EVENTS = 100;
 
-const DEBUG_DIR = path.join(PROJECT_ROOT, '.codemap', 'debug');
+const DEBUG_DIR = path.join(PROJECT_ROOT, '.agent-runtime-observability', 'debug');
 
 function ensureDebugDir(): void {
   if (!fs.existsSync(DEBUG_DIR)) {

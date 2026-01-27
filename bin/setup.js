@@ -3,7 +3,7 @@
  * Agent Observability Setup Script
  *
  * Configures Cursor and Claude Code hooks for telemetry collection.
- * Run from a project directory: node /path/to/codemap/bin/setup.js setup
+ * Run from a project directory: node /path/to/agent-runtime-observability/bin/setup.js setup
  */
 
 import fs from 'fs';
@@ -12,13 +12,13 @@ import { fileURLToPath } from 'url';
 import { spawn, exec } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CODEMAP_ROOT = path.resolve(__dirname, '..');
+const OBSERVABILITY_ROOT = path.resolve(__dirname, '..');
 const TARGET_DIR = process.cwd();
 const SERVER_PORT = 5174;
 const CLIENT_PORT = 5173;
 
 // Hook path (absolute)
-const TELEMETRY_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'telemetry-hook.sh');
+const TELEMETRY_HOOK = path.join(OBSERVABILITY_ROOT, 'hooks', 'telemetry-hook.sh');
 
 // ============================================================================
 // Cursor Configuration
@@ -27,8 +27,7 @@ const TELEMETRY_HOOK = path.join(CODEMAP_ROOT, 'hooks', 'telemetry-hook.sh');
 const cursorHooksConfig = {
   version: 1,
   hooks: {
-    // Session lifecycle
-    sessionStart: [{ command: `${TELEMETRY_HOOK} sessionStart` }],
+    // Session lifecycle (sessionStart omitted - runs start on first prompt submission)
     sessionEnd: [{ command: `${TELEMETRY_HOOK} sessionEnd` }],
     
     // Tool lifecycle (generic - fires for all tools)
@@ -134,7 +133,7 @@ function startServer() {
     console.log('Starting observability server...\n');
 
     const child = spawn('npm', ['run', 'dev'], {
-      cwd: CODEMAP_ROOT,
+      cwd: OBSERVABILITY_ROOT,
       stdio: 'inherit',
       shell: true,
       env: { ...process.env, PROJECT_ROOT: TARGET_DIR }
@@ -184,7 +183,7 @@ function setupClaudeHooks() {
   if (!settings.permissions) settings.permissions = {};
   if (!settings.permissions.allow) settings.permissions.allow = [];
 
-  // Remove old codemap permissions
+  // Remove old hook permissions
   settings.permissions.allow = settings.permissions.allow.filter(
     p => !p.includes('telemetry-hook') && !p.includes('file-activity-hook') && !p.includes('thinking-hook')
   );
@@ -196,17 +195,17 @@ function setupClaudeHooks() {
 
 function setupGitignore() {
   const gitignorePath = path.join(TARGET_DIR, '.gitignore');
-  const entry = '\n# Agent Observability traces\n.codemap/\n';
+  const entry = '\n# Agent Observability traces\n.agent-runtime-observability/\n';
 
   if (fs.existsSync(gitignorePath)) {
     const content = fs.readFileSync(gitignorePath, 'utf8');
-    if (!content.includes('.codemap/')) {
+    if (!content.includes('.agent-runtime-observability/')) {
       fs.appendFileSync(gitignorePath, entry);
-      console.log('  Added .codemap/ to .gitignore');
+      console.log('  Added .agent-runtime-observability/ to .gitignore');
     }
   } else {
     fs.writeFileSync(gitignorePath, entry.trim() + '\n');
-    console.log('  Created .gitignore with .codemap/');
+    console.log('  Created .gitignore with .agent-runtime-observability/');
   }
 }
 
@@ -269,14 +268,14 @@ async function run() {
 
 function setup() {
   console.log('Agent Observability Setup\n');
-  console.log(`Codemap: ${CODEMAP_ROOT}`);
+  console.log(`Repo:    ${OBSERVABILITY_ROOT}`);
   console.log(`Target:  ${TARGET_DIR}\n`);
 
   setupAll();
 
   console.log('Setup complete!\n');
   console.log('To start the observability dashboard:\n');
-  console.log(`  cd ${CODEMAP_ROOT}`);
+  console.log(`  cd ${OBSERVABILITY_ROOT}`);
   console.log('  npm run dev\n');
   console.log(`Then open: http://localhost:${CLIENT_PORT}/observability\n`);
 }
@@ -296,7 +295,7 @@ if (command === 'setup') {
 } else {
   console.log('Agent Observability\n');
   console.log('Usage:');
-  console.log('  codemap          - Setup hooks and start server');
-  console.log('  codemap setup    - Only configure hooks');
+  console.log('  agent-runtime-observability          - Setup hooks and start server');
+  console.log('  agent-runtime-observability setup    - Only configure hooks');
   console.log('');
 }

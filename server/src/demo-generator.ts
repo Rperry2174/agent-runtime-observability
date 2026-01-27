@@ -779,7 +779,7 @@ export class DemoGenerator {
     runTranscriptPath: string;
     transcriptsDir: string;
   } {
-    const transcriptsDir = path.join(this.projectRoot, '.codemap', 'demo-transcripts', runId);
+    const transcriptsDir = path.join(this.projectRoot, '.agent-runtime-observability', 'demo-transcripts', runId);
     fs.mkdirSync(transcriptsDir, { recursive: true });
 
     const runTranscriptPath = path.join(transcriptsDir, 'conversation.md');

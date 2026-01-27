@@ -54,8 +54,8 @@ export class TraceStore {
   private onUpdate: ((update: TraceUpdate) => void) | null = null;
 
   constructor(projectRoot: string) {
-    this.tracesDir = path.join(projectRoot, '.codemap', 'traces');
-    this.debugDir = path.join(projectRoot, '.codemap', 'debug');
+    this.tracesDir = path.join(projectRoot, '.agent-runtime-observability', 'traces');
+    this.debugDir = path.join(projectRoot, '.agent-runtime-observability', 'debug');
     this.ensureTracesDir();
     this.ensureDebugDir();
     this.loadRecentRuns();
