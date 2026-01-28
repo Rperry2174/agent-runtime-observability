@@ -15,7 +15,6 @@ import {
   TOOL_COLORS,
   STATUS_COLORS,
   RUN_STATUS_COLORS,
-  ConnectionStatus,
   ToolCategory,
 } from '../types';
 
@@ -55,11 +54,11 @@ export function ObservabilityDashboard() {
     agentsRef,
     spansRef,
     dataVersionRef,
-    connectionStatus,
+    connectionStatus: _connectionStatus,
     recentRuns,
     selectedRunId,
     selectRun,
-    refreshRuns,
+    refreshRuns: _refreshRuns,
   } = useTrace({ autoSelect: !urlRunId });
 
   const [selectedSpan, setSelectedSpan] = useState<Span | null>(null);
@@ -181,12 +180,6 @@ export function ObservabilityDashboard() {
     } finally {
       setTranscriptLoading(false);
     }
-  };
-
-  // Find parent agent for subagents
-  const getParentAgent = (agent: Agent) => {
-    if (!agent.parentAgentId) return null;
-    return agentsRef.current.get(agent.parentAgentId);
   };
 
   // Get the prompt/title from run metadata
@@ -380,8 +373,7 @@ export function ObservabilityDashboard() {
                       : agentSpans;
                     if (displaySpans.length === 0) return null;
                     const isSubagent = !!agent.parentAgentId;
-                    const parentAgent = getParentAgent(agent);
-                    
+
                     const groupKey = getAgentGroupKey(agent);
                     const prevGroupKey = index > 0 ? getAgentGroupKey(agents[index - 1]) : null;
                     const isGroupStart = groupKey !== prevGroupKey;

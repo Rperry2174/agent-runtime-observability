@@ -201,6 +201,17 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
     switch (update.type) {
       case 'spanStart':
         if (update.span) {
+          // Ensure agent exists for this span (auto-create placeholder if needed)
+          if (update.span.agentId && !agentsRef.current.has(update.span.agentId)) {
+            const agentCount = agentsRef.current.size + 1;
+            agentsRef.current.set(update.span.agentId, {
+              agentId: update.span.agentId,
+              runId: update.runId,
+              displayName: `Agent ${agentCount}`,
+              startedAt: update.span.startedAt,
+            });
+          }
+
           const existingIndex = spanIndexRef.current.get(update.span.spanId);
           if (existingIndex !== undefined) {
             const next = [...spansRef.current];
@@ -217,6 +228,17 @@ export function useTrace(options: UseTraceOptions = {}): UseTraceResult {
       case 'spanEnd':
       case 'spanUpdate':
         if (update.span) {
+          // Ensure agent exists for this span (auto-create placeholder if needed)
+          if (update.span.agentId && !agentsRef.current.has(update.span.agentId)) {
+            const agentCount = agentsRef.current.size + 1;
+            agentsRef.current.set(update.span.agentId, {
+              agentId: update.span.agentId,
+              runId: update.runId,
+              displayName: `Agent ${agentCount}`,
+              startedAt: update.span.startedAt,
+            });
+          }
+
           const existingIndex = spanIndexRef.current.get(update.span.spanId);
           if (existingIndex !== undefined) {
             const next = [...spansRef.current];
