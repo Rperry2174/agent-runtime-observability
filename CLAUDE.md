@@ -19,8 +19,8 @@ Run tests: `cd server && npm test` and `cd client && npm test`
 
 | Resource | URL |
 |----------|-----|
-| Server | `http://localhost:5174` |
-| Dashboard | `http://localhost:5173/observability` |
+| Server | `http://localhost:5274` |
+| Dashboard | `http://localhost:5273/observability` |
 | Start both | `npm run dev` |
 | Run tests | `npm test` (from client/ or server/) |
 | Hook logs | `tail -f /tmp/observability-hook.log` |
@@ -41,7 +41,7 @@ Run tests: `cd server && npm test` and `cd client && npm test`
 │          │ POST /api/telemetry                                  │
 │          ▼                                                      │
 │ ┌─────────────────┐                                             │
-│ │ server/         │ Express + WebSocket on port 5174            │
+│ │ server/         │ Express + WebSocket on port 5274            │
 │ │ - index.ts      │ API endpoints                               │
 │ │ - trace-store.ts│ Span correlation + JSONL persistence        │
 │ │ - websocket.ts  │ Real-time broadcast                         │
@@ -49,7 +49,7 @@ Run tests: `cd server && npm test` and `cd client && npm test`
 │          │ WebSocket `trace` messages                           │
 │          ▼                                                      │
 │ ┌─────────────────┐                                             │
-│ │ client/         │ React dashboard on port 5173                │
+│ │ client/         │ React dashboard on port 5273                │
 │ │ - useTrace.ts   │ WebSocket + REST data layer                 │
 │ │ - Dashboard.tsx │ Swimlane timeline + inspect panel           │
 │ └─────────────────┘                                             │
@@ -101,7 +101,7 @@ agent-runtime-observability/
 
 ### WebSocket
 
-- Path: `ws://localhost:5174/ws`
+- Path: `ws://localhost:5274/ws`
 - Messages: `{ type: 'trace', data: TraceUpdate }`
 - Client can subscribe: `{ type: 'subscribe', runId: '...' }` or `{ type: 'subscribeAll' }`
 
@@ -208,7 +208,7 @@ export const TOOL_COLORS: Record<ToolCategory, string> = {
 tail -f /tmp/observability-hook.log
 
 # Test telemetry endpoint manually
-curl -X POST http://localhost:5174/api/telemetry \
+curl -X POST http://localhost:5274/api/telemetry \
   -H "Content-Type: application/json" \
   -d '{"eventKind":"toolStart","runId":"test-123","toolName":"Read","timestamp":'$(date +%s000)'}'
 ```
@@ -217,13 +217,13 @@ curl -X POST http://localhost:5174/api/telemetry \
 
 ```bash
 # Get recent runs
-curl http://localhost:5174/api/runs | jq
+curl http://localhost:5274/api/runs | jq
 
 # Get run details
-curl http://localhost:5174/api/runs/RUN_ID | jq
+curl http://localhost:5274/api/runs/RUN_ID | jq
 
 # Health check
-curl http://localhost:5174/api/health | jq
+curl http://localhost:5274/api/health | jq
 ```
 
 ### Client Issues
@@ -242,7 +242,7 @@ See `README.md` for full example configs.
 
 ## Key Design Decisions
 
-1. **Fixed Ports (5173/5174)**: Never change. Hooks and client hardcode these.
+1. **Fixed Ports (5273/5274)**: Never change. Hooks and client hardcode these.
 
 2. **Fail-open ingestion**: Telemetry endpoint always returns 200 to not block hooks.
 

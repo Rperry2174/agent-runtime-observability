@@ -14,8 +14,8 @@ import { spawn, exec } from 'child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OBSERVABILITY_ROOT = path.resolve(__dirname, '..');
 const TARGET_DIR = process.cwd();
-const SERVER_PORT = 5174;
-const CLIENT_PORT = 5173;
+const SERVER_PORT = 5274;
+const CLIENT_PORT = 5273;
 
 // Hook path (absolute)
 const TELEMETRY_HOOK = path.join(OBSERVABILITY_ROOT, 'hooks', 'telemetry-hook.sh');
@@ -119,6 +119,67 @@ function setupCursorHooks() {
   console.log('  Configured .cursor/hooks.json (Cursor)');
 }
 
+function setupSlashCommands() {
+  const cursorDir = path.join(TARGET_DIR, '.cursor');
+  const commandsDir = path.join(cursorDir, 'commands');
+
+  if (!fs.existsSync(commandsDir)) {
+    fs.mkdirSync(commandsDir, { recursive: true });
+  }
+
+  // Create /hooks-off command
+  const hooksOffContent = `# Disable Observability Hooks
+
+Disable telemetry hooks for this project by renaming the hooks.json file.
+
+Run this bash command:
+
+\`\`\`bash
+mv .cursor/hooks.json .cursor/hooks.json.disabled 2>/dev/null && echo "✓ Hooks disabled - telemetry stopped" || echo "Hooks already disabled or not found"
+\`\`\`
+`;
+
+  // Create /hooks-on command
+  const hooksOnContent = `# Enable Observability Hooks
+
+Enable telemetry hooks for this project by restoring the hooks.json file.
+
+Run this bash command:
+
+\`\`\`bash
+mv .cursor/hooks.json.disabled .cursor/hooks.json 2>/dev/null && echo "✓ Hooks enabled - telemetry active" || echo "Hooks already enabled or not found"
+\`\`\`
+
+Dashboard: http://localhost:${CLIENT_PORT}/observability
+`;
+
+  // Create /hooks-status command
+  const hooksStatusContent = `# Check Hooks Status
+
+Check if observability hooks are currently enabled or disabled.
+
+Run this bash command:
+
+\`\`\`bash
+if [ -f .cursor/hooks.json ]; then
+  echo "✓ Hooks ENABLED"
+  echo "  Dashboard: http://localhost:${CLIENT_PORT}/observability"
+elif [ -f .cursor/hooks.json.disabled ]; then
+  echo "○ Hooks DISABLED"
+  echo "  Run /hooks-on to enable"
+else
+  echo "✗ Hooks NOT CONFIGURED"
+fi
+\`\`\`
+`;
+
+  fs.writeFileSync(path.join(commandsDir, 'hooks-off.md'), hooksOffContent);
+  fs.writeFileSync(path.join(commandsDir, 'hooks-on.md'), hooksOnContent);
+  fs.writeFileSync(path.join(commandsDir, 'hooks-status.md'), hooksStatusContent);
+
+  console.log('  Created commands: /hooks-on, /hooks-off, /hooks-status');
+}
+
 
 function setupGitignore() {
   const gitignorePath = path.join(TARGET_DIR, '.gitignore');
@@ -146,11 +207,12 @@ function makeHookExecutable() {
 
 function setupAll() {
   console.log('\nConfiguring hooks...');
-  
+
   setupCursorHooks();
+  setupSlashCommands();
   setupGitignore();
   makeHookExecutable();
-  
+
   console.log('');
 }
 

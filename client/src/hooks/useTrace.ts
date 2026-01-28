@@ -16,8 +16,8 @@ import {
   ConnectionStatus,
 } from '../types';
 
-const WS_URL = 'ws://localhost:5174/ws';
-const API_URL = 'http://localhost:5174/api';
+const WS_URL = 'ws://localhost:5274/ws';
+const API_URL = 'http://localhost:5274/api';
 
 export interface UseTraceResult {
   // Current run data (refs for animation loop access)

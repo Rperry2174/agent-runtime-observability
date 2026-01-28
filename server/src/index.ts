@@ -14,8 +14,9 @@ import { WebSocketManager } from './websocket.js';
 import { TraceStore } from './trace-store.js';
 import { DemoGenerator } from './demo-generator.js';
 import { TelemetryEvent, AgentSource, TelemetryEventKind } from './types.js';
+import { validateTrace, generateTraceReport, ExpectedTrace } from './trace-verifier.js';
 
-const PORT = 5174;
+const PORT = 5274;
 
 // Project root detection
 function detectProjectRoot(): string {
@@ -360,21 +361,99 @@ app.get('/api/runs/:runId', (req, res) => {
 
 /**
  * GET /api/runs/:runId/spans
- * 
+ *
  * Get spans for a run.
  */
 app.get('/api/runs/:runId/spans', (req, res) => {
   const { runId } = req.params;
   const since = req.query.since ? parseInt(req.query.since as string) : undefined;
-  
+
   const result = traceStore.getSpans(runId, since);
-  
+
   if (!result) {
     res.status(404).json({ error: 'Run not found' });
     return;
   }
-  
+
   res.json(result);
+});
+
+/**
+ * GET /api/runs/:runId/verify
+ *
+ * Verify trace integrity and get a detailed report.
+ * Returns validation results, statistics, and trace tree.
+ */
+app.get('/api/runs/:runId/verify', (req, res) => {
+  const { runId } = req.params;
+  const details = traceStore.getRunDetails(runId);
+
+  if (!details) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  const spansResult = traceStore.getSpans(runId);
+  const spans = spansResult?.spans || [];
+
+  const validation = validateTrace(details, spans);
+
+  res.json({
+    runId,
+    status: details.status,
+    ...validation,
+  });
+});
+
+/**
+ * POST /api/runs/:runId/verify
+ *
+ * Verify trace against expected structure.
+ * Body: { expected: ExpectedTrace }
+ */
+app.post('/api/runs/:runId/verify', (req, res) => {
+  const { runId } = req.params;
+  const { expected } = req.body as { expected?: ExpectedTrace };
+
+  const details = traceStore.getRunDetails(runId);
+
+  if (!details) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  const spansResult = traceStore.getSpans(runId);
+  const spans = spansResult?.spans || [];
+
+  const validation = validateTrace(details, spans, expected);
+
+  res.json({
+    runId,
+    status: details.status,
+    ...validation,
+  });
+});
+
+/**
+ * GET /api/runs/:runId/report
+ *
+ * Get a human-readable trace verification report.
+ */
+app.get('/api/runs/:runId/report', (req, res) => {
+  const { runId } = req.params;
+  const details = traceStore.getRunDetails(runId);
+
+  if (!details) {
+    res.status(404).json({ error: 'Run not found' });
+    return;
+  }
+
+  const spansResult = traceStore.getSpans(runId);
+  const spans = spansResult?.spans || [];
+
+  const report = generateTraceReport(details, spans);
+
+  res.type('text/plain').send(report);
 });
 
 // ============================================================================

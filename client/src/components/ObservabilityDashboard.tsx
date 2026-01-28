@@ -40,7 +40,7 @@ const SPAN_TRACK_BG = '#0a0a0f';
 const SPAN_ROW_HEIGHT = 18;
 const SPAN_ROW_GAP = 4;
 const SPAN_TRACK_MIN_HEIGHT = 28;
-const API_URL = 'http://localhost:5174/api';
+const API_URL = 'http://localhost:5274/api';
 
 // ============================================================================
 // Main Component

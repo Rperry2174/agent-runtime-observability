@@ -16,8 +16,8 @@ npm install
 npm run dev
 ```
 
-- **Server**: http://localhost:5174
-- **Dashboard**: http://localhost:5173/observability
+- **Server**: http://localhost:5274
+- **Dashboard**: http://localhost:5273/observability
 
 ## Setup Hooks in Your Project
 
@@ -76,7 +76,7 @@ Cursor Hooks → Telemetry API → TraceStore → WebSocket → Dashboard
                                JSONL Logs
 ```
 
-### Server (Port 5174)
+### Server (Port 5274)
 
 | Endpoint | Description |
 |----------|-------------|
@@ -87,7 +87,7 @@ Cursor Hooks → Telemetry API → TraceStore → WebSocket → Dashboard
 | `POST /api/demo/start` | Start demo run |
 | `WS /ws` | Real-time updates |
 
-### Client (Port 5173)
+### Client (Port 5273)
 
 | Route | Description |
 |-------|-------------|
@@ -131,8 +131,8 @@ Traces are persisted to `.agent-runtime-observability/traces/<runId>.jsonl` for 
 
 **Server not starting?**
 ```bash
-lsof -i :5174  # Check if port in use
-curl http://localhost:5174/api/health
+lsof -i :5274  # Check if port in use
+curl http://localhost:5274/api/health
 ```
 
 **Hooks not firing?**
@@ -142,7 +142,7 @@ tail -f /tmp/observability-hook.log
 
 **No spans appearing?**
 ```bash
-curl http://localhost:5174/api/runs | jq
+curl http://localhost:5274/api/runs | jq
 ```
 
 ## License

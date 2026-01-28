@@ -9,7 +9,7 @@
 #              subagentStart, subagentStop, stop
 
 EVENT_KIND="$1"
-SERVER_URL="http://localhost:5174/api/telemetry"
+SERVER_URL="http://localhost:5274/api/telemetry"
 LOG_FILE="/tmp/observability-hook.log"
 DEBUG_LOG="/tmp/observability-hook-debug.log"
 SHELL_SPAN_FILE="/tmp/observability-shell-spans.log"
